@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: azure-production
@@ -21,7 +22,7 @@ jobs:
       vars.AZURE_VM_DEPLOY_ENABLED == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success')
-    runs-on: [self-hosted, linux, x64, agentops-production]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: azure-production
     steps:
@@ -37,13 +38,36 @@ jobs:
             echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check out deployment automation
-        uses: actions/checkout@v4
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v2
         with:
-          ref: ${{ steps.deployment.outputs.sha }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy and verify
+        uses: azure/cli@v2
         env:
           DEPLOY_SHA: ${{ steps.deployment.outputs.sha }}
-        run: ./scripts/deploy-azure-vm.sh "$DEPLOY_SHA"
+        with:
+          inlineScript: |
+            set -Eeuo pipefail
+            deployment_script="$(cat <<EOF
+            set -Eeuo pipefail
+            cd /opt/agentops-ai-workflow-platform
+            git fetch --prune origin main
+            git checkout main
+            git merge --ff-only ${DEPLOY_SHA}
+            ./scripts/deploy-azure-vm.sh ${DEPLOY_SHA}
+            EOF
+            )"
 
+            az vm run-command invoke \
+              --resource-group rg-agentops-demo \
+              --name vm-agentops-demo \
+              --command-id RunShellScript \
+              --scripts "$deployment_script" \
+              --query 'value[0].message' \
+              --output tsv | tee deployment-output.txt
+
+            grep -q 'Enable succeeded' deployment-output.txt
