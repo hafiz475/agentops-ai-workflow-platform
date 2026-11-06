@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AgentOps Studio — Azure VM Setup and Deployment Runbook</title>
+  <style>
+    @page { size: A4; margin: 17mm 16mm 18mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #172033; font: 10.2pt/1.48 "Segoe UI", Arial, sans-serif; }
+    h1, h2, h3 { color: #0b3b70; page-break-after: avoid; }
+    h1 { font-size: 26pt; line-height: 1.12; margin: 0 0 8mm; }
+    h2 { font-size: 17pt; border-bottom: 2px solid #1685d1; padding-bottom: 2mm; margin: 9mm 0 4mm; }
+    h3 { font-size: 12.5pt; margin: 6mm 0 2mm; }
+    p { margin: 0 0 3.2mm; }
+    ul, ol { margin: 2mm 0 4mm 6mm; padding-left: 5mm; }
+    li { margin: 1.2mm 0; }
+    code { font-family: Consolas, "Courier New", monospace; font-size: 8.8pt; }
+    pre { background: #101827; color: #eef5ff; border-radius: 5px; padding: 4mm; white-space: pre-wrap; word-break: break-word; page-break-inside: avoid; }
+    table { width: 100%; border-collapse: collapse; margin: 3mm 0 5mm; page-break-inside: avoid; }
+    th { background: #0b5fa5; color: white; text-align: left; }
+    th, td { border: 1px solid #c9d5e3; padding: 2.2mm 2.6mm; vertical-align: top; }
+    tr:nth-child(even) td { background: #f4f8fc; }
+    .cover { min-height: 245mm; padding: 24mm 8mm; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
+    .eyebrow { color: #1685d1; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; }
+    .subtitle { font-size: 15pt; color: #40536b; margin-bottom: 14mm; }
+    .meta { border-left: 5px solid #1685d1; padding: 4mm 6mm; background: #f0f7fd; }
+    .callout { border-left: 4px solid #1685d1; background: #eef7ff; padding: 3mm 4mm; margin: 4mm 0; page-break-inside: avoid; }
+    .warning { border-left-color: #d97706; background: #fff7e8; }
+    .success { border-left-color: #16803c; background: #eefaf2; }
+    .pagebreak { page-break-before: always; }
+    .toc a { color: #0b5fa5; text-decoration: none; }
+    .small { font-size: 8.7pt; color: #526477; }
+    .check { color: #16803c; font-weight: 700; }
+    .footer-note { margin-top: 9mm; border-top: 1px solid #ccd6e2; padding-top: 3mm; color: #66758a; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="eyebrow">Deployment Runbook · Milestone 0</div>
+    <h1>AgentOps Studio<br>Azure VM Setup &amp; Deployment</h1>
+    <div class="subtitle">The complete tab-by-tab configuration, Linux deployment, troubleshooting, verification, cost budget, and cleanup record</div>
+    <div class="meta">
+      <p><strong>Application:</strong> AgentOps Studio</p>
+      <p><strong>Repository:</strong> hafiz475/agentops-ai-workflow-platform</p>
+      <p><strong>Azure resource group:</strong> rg-agentops-demo</p>
+      <p><strong>VM:</strong> vm-agentops-demo · Central India</p>
+      <p><strong>Deployment date:</strong> 6 November 2026</p>
+      <p><strong>Final deployed commit:</strong> 15f1212</p>
+    </div>
+    <p class="footer-note">Prepared as a reproducible deployment record. Generated passwords and the SSH private key are intentionally not included.</p>
+  </section>
+
+  <h2>Contents</h2>
+  <ol class="toc">
+    <li><a href="#outcome">Final outcome and architecture</a></li>
+    <li><a href="#decisions">Why this deployment design was chosen</a></li>
+    <li><a href="#create">Create the Azure virtual machine</a></li>
+    <li><a href="#tabs">Exact settings on every Azure VM tab</a></li>
+    <li><a href="#deploy">Cloud-init and Linux deployment</a></li>
+    <li><a href="#systemd">Automatic startup with systemd</a></li>
+    <li><a href="#troubleshoot">API health-check failure and permanent fix</a></li>
+    <li><a href="#verify">Deployment verification</a></li>
+    <li><a href="#budget">Create the Azure budget</a></li>
+    <li><a href="#railway">Railway cleanup</a></li>
+    <li><a href="#operations">Daily operations and maintenance</a></li>
+    <li><a href="#security">Security, limitations, and shutdown</a></li>
+  </ol>
+
+  <h2 id="outcome">1. Final outcome and architecture</h2>
+  <div class="success callout"><strong>Deployment result:</strong> the full Milestone 0 application is running successfully on one Azure Linux VM. The frontend, API, AI service, PostgreSQL, and Redis containers start automatically after reboot.</div>
+  <table>
+    <tr><th>Item</th><th>Final value</th></tr>
+    <tr><td>Resource group</td><td><code>rg-agentops-demo</code></td></tr>
+    <tr><td>Virtual machine</td><td><code>vm-agentops-demo</code></td></tr>
+    <tr><td>Region / image</td><td>Central India / Ubuntu Server 24.04 LTS, x64 Gen2</td></tr>
+    <tr><td>VM size</td><td>Standard B2ls v2 — 2 vCPUs, 4 GiB RAM</td></tr>
+    <tr><td>Public IP at deployment</td><td><code>4.247.145.108</code></td></tr>
+    <tr><td>Frontend</td><td><code>http://4.247.145.108:3000/</code></td></tr>
+    <tr><td>API health</td><td><code>http://4.247.145.108:3001/health</code></td></tr>
+    <tr><td>API readiness</td><td><code>http://4.247.145.108:3001/ready</code></td></tr>
+  </table>
+  <table>
+    <tr><th>Container</th><th>Purpose</th><th>Port exposure</th></tr>
+    <tr><td>web</td><td>React/Vite production build served by Nginx</td><td>Public TCP 3000 → container 80</td></tr>
+    <tr><td>api</td><td>Fastify control-plane API</td><td>Public TCP 3001</td></tr>
+    <tr><td>ai-service</td><td>FastAPI execution service</td><td>Host 8000; blocked by Azure NSG</td></tr>
+    <tr><td>postgres</td><td>PostgreSQL 16 data store</td><td>Private Compose network only, 5432</td></tr>
+    <tr><td>redis</td><td>Redis 7 cache/coordination</td><td>Private Compose network only, 6379</td></tr>
+  </table>
+
+  <h2 id="decisions">2. Why this design was chosen</h2>
+  <ul>
+    <li><strong>One VM:</strong> Railway's free-plan resource limit could not host the API, AI service, PostgreSQL, and Redis together. One Azure VM could run all five containers and use the available Azure credit.</li>
+    <li><strong>Docker Compose:</strong> the repository already defined all services, health checks, dependency order, volumes, and internal DNS names.</li>
+    <li><strong>Standard B2ls v2:</strong> the originally preferred B2s SKU was unavailable for this subscription in Central India. B2ls v2 was deployable and provided the required 2 vCPUs and 4 GiB RAM.</li>
+    <li><strong>Standard SSD:</strong> enough for a Milestone 0 demo while keeping storage cost lower than Premium SSD.</li>
+    <li><strong>Ports 3000 and 3001 only:</strong> users need the frontend and API. PostgreSQL, Redis, and the Python service do not need direct internet access.</li>
+    <li><strong>SSH restricted to one IP:</strong> prevents the whole internet from attempting SSH login.</li>
+    <li><strong>Systemd:</strong> makes the Compose stack return automatically after a VM restart.</li>
+  </ul>
+
+  <h2 id="create">3. Create the Azure virtual machine</h2>
+  <ol>
+    <li>Sign in to the Azure portal.</li>
+    <li>Use the top search bar to search for <strong>Virtual machines</strong>.</li>
+    <li>Open <strong>Virtual machines</strong> under Services, then select <strong>Create → Azure virtual machine</strong>.</li>
+    <li>Complete each tab using the settings in the next section. Do not use the ARM64 Ubuntu image; the selected application deployment used x64.</li>
+  </ol>
+
+  <h2 id="tabs">4. Exact settings on every Azure VM tab</h2>
+  <h3>4.1 Basics</h3>
+  <table>
+    <tr><th>Field</th><th>Configured value</th><th>Reason</th></tr>
+    <tr><td>Subscription</td><td>Azure subscription 1</td><td>Subscription containing the $200 promotional credit.</td></tr>
+    <tr><td>Resource group</td><td>Create new: <code>rg-agentops-demo</code></td><td>Keeps every demo resource together for cost tracking and one-step cleanup.</td></tr>
+    <tr><td>VM name</td><td><code>vm-agentops-demo</code></td><td>Clear, application-specific name.</td></tr>
+    <tr><td>Region</td><td>Central India</td><td>Chosen region close to the operator; SKU availability was checked manually.</td></tr>
+    <tr><td>Availability</td><td>No infrastructure redundancy required</td><td>Single-VM demo; avoids additional resources and cost.</td></tr>
+    <tr><td>Security type</td><td>Trusted launch virtual machines</td><td>Enables Secure Boot and vTPM.</td></tr>
+    <tr><td>Image</td><td>Ubuntu Server 24.04 LTS, x64 Gen2</td><td>Long-term-support Linux with Docker compatibility.</td></tr>
+    <tr><td>Architecture</td><td>x64</td><td>Matches the selected container/runtime path.</td></tr>
+    <tr><td>Size</td><td>Standard B2ls v2</td><td>B2s was unavailable; this SKU supplied 2 vCPUs and 4 GiB RAM.</td></tr>
+    <tr><td>Spot discount</td><td>Off / On-demand</td><td>Avoids eviction during the demo.</td></tr>
+    <tr><td>Authentication</td><td>SSH public key</td><td>Safer than password authentication.</td></tr>
+    <tr><td>Username</td><td><code>azureuser</code></td><td>Linux administrator account used for SSH.</td></tr>
+    <tr><td>SSH key source</td><td>Generate new key pair</td><td>Azure generated the public/private pair.</td></tr>
+    <tr><td>Key type / name</td><td>RSA / <code>agentops-demo-key</code></td><td>Compatible OpenSSH key.</td></tr>
+    <tr><td>Public inbound ports</td><td>None</td><td>Custom, restricted rules were created on the Networking tab.</td></tr>
+  </table>
+  <div class="warning callout"><strong>SSH private key:</strong> Azure downloaded it once during VM creation. Store it securely. Never upload it to GitHub, paste it into cloud-init, or include it in documentation.</div>
+
+  <h3>4.2 Disks</h3>
+  <table>
+    <tr><th>Field</th><th>Configured value</th></tr>
+    <tr><td>Encryption at host</td><td>Off (not registered for the subscription)</td></tr>
+    <tr><td>OS disk size</td><td>Image default — 30 GiB</td></tr>
+    <tr><td>OS disk type</td><td>Standard SSD (StandardSSD_LRS)</td></tr>
+    <tr><td>Delete with VM</td><td>Enabled</td></tr>
+    <tr><td>Ultra Disk compatibility</td><td>Disabled</td></tr>
+    <tr><td>Key management</td><td>Platform-managed key</td></tr>
+    <tr><td>Data disks</td><td>None</td></tr>
+    <tr><td>Ephemeral OS disk</td><td>None</td></tr>
+  </table>
+
+  <h3>4.3 Networking</h3>
+  <table>
+    <tr><th>Field</th><th>Configured value</th></tr>
+    <tr><td>Virtual network</td><td>New <code>vnet-centralindia-1</code></td></tr>
+    <tr><td>Subnet</td><td>New <code>snet-centralindia-1</code>, <code>172.16.0.0/24</code></td></tr>
+    <tr><td>Public IP</td><td>New <code>vm-agentops-demo-ip</code></td></tr>
+    <tr><td>NIC network security group</td><td>Advanced → new <code>vm-agentops-demo-nsg</code></td></tr>
+    <tr><td>Delete public IP and NIC with VM</td><td>Enabled</td></tr>
+    <tr><td>Accelerated networking</td><td>Enabled/required by selected size</td></tr>
+    <tr><td>Load balancing</td><td>None</td></tr>
+  </table>
+  <h3>Inbound rule 1 — restricted SSH</h3>
+  <table>
+    <tr><th>Setting</th><th>Value</th></tr>
+    <tr><td>Source</td><td>My IP address: <code>115.97.8.157/32</code></td></tr>
+    <tr><td>Source port range</td><td><code>1-65535</code> (the portal rejected <code>*</code> during this session)</td></tr>
+    <tr><td>Destination / service</td><td>Any / SSH</td></tr>
+    <tr><td>Destination port / protocol</td><td>22 / TCP</td></tr>
+    <tr><td>Action / priority</td><td>Allow / 900</td></tr>
+    <tr><td>Name</td><td><code>default-allow-ssh</code></td></tr>
+  </table>
+  <h3>Inbound rule 2 — public frontend and API</h3>
+  <table>
+    <tr><th>Setting</th><th>Value</th></tr>
+    <tr><td>Source / source ports</td><td>Any / <code>1-65535</code></td></tr>
+    <tr><td>Destination / service</td><td>Any / Custom</td></tr>
+    <tr><td>Destination ports / protocol</td><td><code>3000,3001</code> / TCP</td></tr>
+    <tr><td>Action / priority</td><td>Allow / 1010</td></tr>
+    <tr><td>Name / description</td><td><code>allow-agentops-web-api</code> / Public AgentOps frontend and API</td></tr>
+  </table>
+  <div class="callout"><strong>Intentionally not opened:</strong> 8000 (AI service), 5432 (PostgreSQL), and 6379 (Redis). They remain unavailable from the internet.</div>
+
+  <h3>4.4 Management</h3>
+  <table>
+    <tr><th>Setting</th><th>Value</th></tr>
+    <tr><td>System-assigned managed identity</td><td>On</td></tr>
+    <tr><td>Microsoft Entra ID login</td><td>Off</td></tr>
+    <tr><td>Auto-shutdown</td><td>Off during creation</td></tr>
+    <tr><td>Periodic assessment</td><td>Off</td></tr>
+    <tr><td>Patch orchestration</td><td>Image default</td></tr>
+    <tr><td>Hibernation</td><td>Off</td></tr>
+    <tr><td>Backup / Site Recovery</td><td>Off</td></tr>
+  </table>
+  <h3>4.5 Monitoring</h3>
+  <table>
+    <tr><th>Setting</th><th>Value</th></tr>
+    <tr><td>Recommended alert rules</td><td>Off</td></tr>
+    <tr><td>Boot diagnostics</td><td>Enabled with managed storage account</td></tr>
+    <tr><td>OS guest diagnostics</td><td>Off</td></tr>
+    <tr><td>Application health monitoring</td><td>Off</td></tr>
+  </table>
+  <h3>4.6 Advanced</h3>
+  <table>
+    <tr><th>Setting</th><th>Value</th></tr>
+    <tr><td>Extensions</td><td>None</td></tr>
+    <tr><td>VM applications</td><td>None</td></tr>
+    <tr><td>Custom data</td><td>Cloud-init deployment script (see Section 5)</td></tr>
+    <tr><td>NVMe optimization</td><td>Off / unsupported for selected size</td></tr>
+    <tr><td>Install SQL Server</td><td>Off</td></tr>
+    <tr><td>Capacity reservation</td><td>None</td></tr>
+  </table>
+  <h3>4.7 Tags</h3>
+  <p>Applied to all selectable resources:</p>
+  <table>
+    <tr><th>Name</th><th>Value</th></tr>
+    <tr><td><code>application</code></td><td><code>agentops-studio</code></td></tr>
+    <tr><td><code>environment</code></td><td><code>demo</code></td></tr>
+    <tr><td><code>milestone</code></td><td><code>0</code></td></tr>
+  </table>
+  <h3>4.8 Review + create</h3>
+  <ol>
+    <li>Confirm validation passes and the size is <strong>Standard B2ls v2</strong>.</li>
+    <li>Review the displayed compute estimate: <strong>$0.0448 USD/hour</strong>, approximately <strong>$32.70/month</strong> for the VM. Disk, public IP, monitoring, tax, and bandwidth can add cost.</li>
+    <li>Select <strong>Create</strong>, then download the generated private key when prompted.</li>
+    <li>Wait for <strong>Your deployment is complete</strong>, then select <strong>Go to resource</strong>.</li>
+  </ol>
+
+  <h2 id="deploy" class="pagebreak">5. Cloud-init and Linux deployment</h2>
+  <p>The VM bootstrap installed Git, Docker Engine, and Docker Compose v2; cloned the <code>main</code> branch; created a protected <code>.env</code> with a generated PostgreSQL password; built the containers; and started the stack.</p>
+  <div class="warning callout"><strong>Secret handling:</strong> the real generated PostgreSQL password is stored only on the VM and is omitted here. The following is the sanitized, reproducible form of the deployment procedure.</div>
+  <pre><code>#!/usr/bin/env bash
+set -euo pipefail
+
+apt-get update
+apt-get install -y ca-certificates curl git openssl
+curl -fsSL https://get.docker.com | sh
+usermod -aG docker azureuser
+
+git clone --branch main \
+  https://github.com/hafiz475/agentops-ai-workflow-platform.git \
+  /opt/agentops-ai-workflow-platform
+cd /opt/agentops-ai-workflow-platform
+
+POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+install -m 600 /dev/null .env
+printf 'POSTGRES_USER=agentops\nPOSTGRES_DB=agentops\nPOSTGRES_PASSWORD=%s\n' \
+  "$POSTGRES_PASSWORD" &gt; .env
+
+docker compose up -d --build
+docker compose ps</code></pre>
+  <p>The equivalent custom-data field begins with <code>#cloud-config</code> and invokes these commands under <code>runcmd</code>. Azure processed the custom data with cloud-init during first boot.</p>
+
+  <h3>Ways to run Linux commands later</h3>
+  <p><strong>Azure portal:</strong> VM → Operations → Run command → RunShellScript. This was used to inspect and repair the deployment without opening an unrestricted SSH rule.</p>
+  <p><strong>SSH from the allowed IP:</strong></p>
+  <pre><code>ssh -i .\agentops-demo-key.pem azureuser@4.247.145.108</code></pre>
+  <p class="small">If the home/public IP changes, update the SSH NSG source to the new exact <code>/32</code> address before attempting SSH. Never change it to Any or <code>0.0.0.0/0</code>.</p>
+
+  <h2 id="systemd">6. Automatic startup with systemd</h2>
+  <p>A service unit was created at <code>/etc/systemd/system/agentops-compose.service</code>:</p>
+  <pre><code>[Unit]
+Description=AgentOps Studio Docker Compose
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/agentops-ai-workflow-platform
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose stop
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+  <pre><code>sudo systemctl daemon-reload
+sudo systemctl enable agentops-compose.service
+sudo systemctl start agentops-compose.service
+sudo systemctl status agentops-compose.service --no-pager</code></pre>
+  <p><strong>Why:</strong> Docker restarts with the VM, and systemd reliably recreates/starts the Compose application in dependency order.</p>
+
+  <h2 id="troubleshoot">7. API health-check failure and permanent fix</h2>
+  <h3>Observed symptoms</h3>
+  <ul>
+    <li>PostgreSQL, Redis, and the AI service were healthy.</li>
+    <li>The API answered successfully from the VM, but Docker marked it unhealthy.</li>
+    <li>The web container did not start because it depends on a healthy API.</li>
+    <li>The systemd unit failed because <code>docker compose up -d</code> reported that dependency failure.</li>
+  </ul>
+  <h3>Diagnosis commands</h3>
+  <pre><code>cd /opt/agentops-ai-workflow-platform
+sudo docker compose ps
+sudo docker compose logs --tail=100 api
+sudo docker compose exec api wget -qO- http://localhost:3001/ready
+sudo docker compose exec api wget -qO- http://127.0.0.1:3001/ready
+sudo journalctl -u agentops-compose.service -n 100 --no-pager</code></pre>
+  <p><code>localhost</code> resolved to IPv6 inside the API container while Fastify was reachable over IPv4. Therefore the readiness request worked at <code>127.0.0.1</code> but failed at <code>localhost</code>.</p>
+  <h3>Permanent repository fix</h3>
+  <p>The API health check in <code>docker-compose.yml</code> was changed from:</p>
+  <pre><code>http://localhost:3001/ready</code></pre>
+  <p>to:</p>
+  <pre><code>http://127.0.0.1:3001/ready</code></pre>
+  <p>The change was committed and pushed to GitHub:</p>
+  <pre><code>15f1212 fix: use IPv4 for API container healthcheck</code></pre>
+  <h3>Update the VM</h3>
+  <pre><code>cd /opt/agentops-ai-workflow-platform
+sudo git pull --ff-only origin main
+sudo docker compose up -d --build
+sudo systemctl daemon-reload
+sudo systemctl restart agentops-compose.service
+sudo docker compose ps</code></pre>
+  <p>The VM fast-forwarded from <code>ffbeac5</code> to <code>15f1212</code>. The temporary override used during diagnosis was removed, leaving the native Compose file as the source of truth.</p>
+
+  <h2 id="verify">8. Deployment verification</h2>
+  <h3>On the VM</h3>
+  <pre><code>cd /opt/agentops-ai-workflow-platform
+sudo docker compose ps
+sudo systemctl is-enabled agentops-compose.service
+sudo systemctl is-active agentops-compose.service
+curl -fsS http://127.0.0.1:3000/ &gt;/dev/null &amp;&amp; echo "frontend: ok"
+curl -fsS http://127.0.0.1:3001/health
+curl -fsS http://127.0.0.1:3001/ready
+curl -fsS http://127.0.0.1:8000/health</code></pre>
+  <p>Expected results:</p>
+  <ul>
+    <li>All five containers are Up; API, AI service, PostgreSQL, and Redis report healthy.</li>
+    <li>The service reports <code>enabled</code> and <code>active</code>.</li>
+    <li>API health and readiness return <code>{"status":"ok",...}</code>.</li>
+  </ul>
+  <h3>From a browser</h3>
+  <ul>
+    <li><code>http://4.247.145.108:3000/</code> — dashboard loads.</li>
+    <li><code>http://4.247.145.108:3001/health</code> — API health is OK.</li>
+    <li><code>http://4.247.145.108:3001/ready</code> — dependencies are ready.</li>
+  </ul>
+  <div class="success callout"><strong>Verified final state:</strong> all containers healthy, systemd enabled and active, frontend reachable, and both API probes returning OK.</div>
+
+  <h2 id="budget">9. Create the Azure budget</h2>
+  <ol>
+    <li>In Azure, open <strong>Resource groups</strong>.</li>
+    <li>Open <code>rg-agentops-demo</code>.</li>
+    <li>Open <strong>Cost Management → Budgets</strong>.</li>
+    <li>Select <strong>Add/Create budget</strong>.</li>
+    <li>Set the budget name to <code>agentops-demo-budget</code>, reset period to <strong>Monthly</strong>, and amount to <strong>$150 USD</strong>.</li>
+    <li>Add an <strong>Actual cost</strong> alert at <strong>75%</strong>.</li>
+    <li>Add a <strong>Forecasted cost</strong> alert at <strong>90%</strong>.</li>
+    <li>Leave Action group as <strong>None</strong> and add the deployment-owner email once. If Azure shows “Unique email address is required,” delete the invalid/duplicate row, enter the address in the empty row, and press Tab once.</li>
+    <li>Save the budget and confirm it appears in the resource-group budget list.</li>
+  </ol>
+  <div class="warning callout"><strong>Important:</strong> an Azure budget sends notifications; it does not automatically stop the VM or prevent charges. Stop/deallocate or delete resources when they are not needed.</div>
+
+  <h2 id="railway">10. Railway cleanup</h2>
+  <p>After Azure was fully verified, the unused Railway project was deleted. This removed the Railway PostgreSQL and Redis instances, their volumes, and the staged API service. It did not affect Azure because the Azure VM uses its own local Compose volumes and services.</p>
+  <ol>
+    <li>Open the Railway project <code>fantastic-bravery</code>.</li>
+    <li>Open Project Settings → Danger Zone.</li>
+    <li>Select Delete Project and confirm the exact project name.</li>
+    <li>Verify that the old project and resources no longer appear.</li>
+  </ol>
+
+  <h2 id="operations">11. Daily operations and maintenance</h2>
+  <h3>Check status</h3>
+  <pre><code>cd /opt/agentops-ai-workflow-platform
+sudo docker compose ps
+sudo systemctl status agentops-compose.service --no-pager</code></pre>
+  <h3>View logs</h3>
+  <pre><code>sudo docker compose logs --tail=200
+sudo docker compose logs -f api
+sudo journalctl -u agentops-compose.service -n 200 --no-pager</code></pre>
+  <h3>Deploy a new commit from main</h3>
+  <pre><code>cd /opt/agentops-ai-workflow-platform
+sudo git pull --ff-only origin main
+sudo docker compose up -d --build
+sudo docker compose ps</code></pre>
+  <h3>Restart application</h3>
+  <pre><code>sudo systemctl restart agentops-compose.service</code></pre>
+  <h3>Stop or start the VM to control cost</h3>
+  <p>Use Azure VM Overview → <strong>Stop</strong> and wait until the status is <strong>Stopped (deallocated)</strong>. A shutdown performed only inside Linux may leave compute allocated. Start it again from the same Azure page.</p>
+  <p class="small">The public IP can change after deallocation unless it is configured as static. Re-check the VM Overview page before using the URLs.</p>
+
+  <h2 id="security">12. Security, limitations, and final checklist</h2>
+  <h3>Security controls in place</h3>
+  <ul>
+    <li>SSH key authentication; no password login.</li>
+    <li>SSH restricted to <code>115.97.8.157/32</code> at deployment time.</li>
+    <li>Only ports 3000 and 3001 are publicly allowed for the app.</li>
+    <li>Database, Redis, and AI execution ports are not allowed by the Azure NSG.</li>
+    <li>PostgreSQL password generated on the VM and protected with file mode 600.</li>
+    <li>Trusted Launch, Secure Boot, and vTPM enabled.</li>
+    <li>OS disk, NIC, and public IP configured for cleanup with VM deletion.</li>
+  </ul>
+  <h3>Current limitations</h3>
+  <ul>
+    <li>The site uses raw HTTP and a public IP; HTTPS and a domain are not configured.</li>
+    <li>Milestone 0 has no application authentication or authorization.</li>
+    <li>The frontend is a dashboard shell; workflow execution/model invocation belongs to later milestones.</li>
+    <li>One VM is a single point of failure and is intended for a demo, not a highly available production deployment.</li>
+    <li>PostgreSQL and Redis data reside in Docker volumes on the VM's OS disk; no independent backup was configured.</li>
+    <li>The Azure promotional credit expires; the budget only alerts.</li>
+  </ul>
+  <h3>Final checklist</h3>
+  <table>
+    <tr><th>Status</th><th>Check</th></tr>
+    <tr><td class="check">Complete</td><td>VM running in Central India</td></tr>
+    <tr><td class="check">Complete</td><td>Five-container Compose stack healthy</td></tr>
+    <tr><td class="check">Complete</td><td>Frontend and API reachable publicly</td></tr>
+    <tr><td class="check">Complete</td><td>API readiness verifies PostgreSQL, Redis, and AI service</td></tr>
+    <tr><td class="check">Complete</td><td>Systemd enabled and active</td></tr>
+    <tr><td class="check">Complete</td><td>IPv4 health-check fix committed and pushed</td></tr>
+    <tr><td class="check">Complete</td><td>Azure budget saved</td></tr>
+    <tr><td class="check">Complete</td><td>Unused Railway project deleted</td></tr>
+  </table>
+  <p class="footer-note">End of runbook · AgentOps Studio Milestone 0 · Azure single-VM deployment</p>
+</body>
+</html>
