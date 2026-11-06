@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
-
 client = TestClient(app)
 
 
@@ -22,4 +21,3 @@ def test_openapi_documents_probes() -> None:
     schema = client.get("/openapi.json").json()
     assert "/health" in schema["paths"]
     assert "/ready" in schema["paths"]
-

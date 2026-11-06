@@ -33,4 +33,3 @@ async def health() -> ServiceStatus:
 async def ready() -> ServiceStatus:
     """Return readiness; provider dependencies will be added with real execution."""
     return status_response()
-
