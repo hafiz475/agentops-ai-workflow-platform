@@ -1,7 +1,9 @@
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
+import { migrateDatabase } from './migrate.js';
 
 const config = loadConfig();
+await migrateDatabase(config.DATABASE_URL);
 const app = await buildApp(config);
 
 try {

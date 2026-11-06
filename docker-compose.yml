@@ -39,6 +39,10 @@ services:
     build:
       context: .
       dockerfile: apps/ai-service/Dockerfile
+    environment:
+      AI_PROVIDER: ${AI_PROVIDER:-development}
+      AI_OPENAI_API_KEY: ${AI_OPENAI_API_KEY:-}
+      AI_OPENAI_MODEL: ${AI_OPENAI_MODEL:-gpt-4o-mini}
     ports:
       - '${AI_SERVICE_PORT:-8000}:8000'
     healthcheck:

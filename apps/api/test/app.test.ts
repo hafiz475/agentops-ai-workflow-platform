@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import type { Dependencies } from '../src/app.js';
 import { buildApp } from '../src/app.js';
+import type { Store } from '../src/store.js';
 
 const healthyDependencies = (state = { postgresChecks: 0 }): Dependencies => ({
   async checkPostgres() {
@@ -12,7 +13,18 @@ const healthyDependencies = (state = { postgresChecks: 0 }): Dependencies => ({
     async ready() {
       return { status: 'ok', service: 'ai-service', version: '0.1.0' };
     },
+    async generate() {
+      return {
+        text: 'DEV_RESPONSE',
+        provider: 'development',
+        model: 'development',
+        latency_ms: 0,
+        input_tokens: null,
+        output_tokens: null,
+      };
+    },
   },
+  store: {} as Store,
   async close() {},
 });
 
