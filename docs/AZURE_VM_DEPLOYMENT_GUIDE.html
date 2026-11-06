@@ -144,15 +144,121 @@
         padding-top: 3mm;
         color: #66758a;
       }
+      .visual {
+        margin: 5mm 0 7mm;
+        border: 1px solid #c7d6e6;
+        border-radius: 8px;
+        background: linear-gradient(145deg, #f7fbff, #edf6ff);
+        padding: 5mm;
+        page-break-inside: avoid;
+      }
+      .visual-title {
+        color: #0b3b70;
+        font-size: 12pt;
+        font-weight: 700;
+        margin-bottom: 3mm;
+      }
+      .flow {
+        display: flex;
+        align-items: stretch;
+        gap: 2mm;
+      }
+      .flow .box {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid #8cb8dd;
+        border-radius: 6px;
+        background: white;
+        padding: 3mm 2mm;
+        text-align: center;
+        font-size: 8.5pt;
+      }
+      .flow .arrow {
+        align-self: center;
+        color: #1685d1;
+        font-size: 16pt;
+        font-weight: 700;
+      }
+      .tabstrip {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 2mm;
+      }
+      .tabcard {
+        background: white;
+        border: 1px solid #a9c6df;
+        border-top: 4px solid #1685d1;
+        border-radius: 5px;
+        padding: 3mm;
+        min-height: 24mm;
+      }
+      .tabcard strong {
+        color: #0b3b70;
+        display: block;
+        margin-bottom: 1mm;
+      }
+      .network-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4mm;
+      }
+      .rule {
+        border-radius: 7px;
+        padding: 4mm;
+        background: white;
+        border: 2px solid #16803c;
+      }
+      .rule.ssh {
+        border-color: #d97706;
+      }
+      .rule .port {
+        font-size: 18pt;
+        font-weight: 700;
+        color: #0b3b70;
+      }
+      .badge {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 1mm 2.5mm;
+        background: #dceeff;
+        color: #0b5fa5;
+        font-size: 8pt;
+        font-weight: 700;
+        margin: 0.5mm;
+      }
+      .pipeline {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 3mm;
+      }
+      .pipeline .stage {
+        background: white;
+        border: 1px solid #9abbd5;
+        border-radius: 6px;
+        padding: 3mm;
+        min-height: 33mm;
+      }
+      .pipeline .stage-number {
+        width: 7mm;
+        height: 7mm;
+        border-radius: 50%;
+        background: #0b5fa5;
+        color: white;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        margin-bottom: 2mm;
+      }
     </style>
   </head>
   <body>
     <section class="cover">
       <div class="eyebrow">Deployment Runbook · Milestone 0</div>
-      <h1>AgentOps Studio<br />Azure VM Setup &amp; Deployment</h1>
+      <h1>AgentOps Studio<br />Azure VM Setup, Deployment &amp; CI/CD</h1>
       <div class="subtitle">
-        The complete tab-by-tab configuration, Linux deployment, troubleshooting, verification, cost
-        budget, and cleanup record
+        The complete visual, tab-by-tab configuration, Linux deployment, troubleshooting,
+        verification, CI/CD, cost budget, and cleanup record
       </div>
       <div class="meta">
         <p><strong>Application:</strong> AgentOps Studio</p>
@@ -160,7 +266,8 @@
         <p><strong>Azure resource group:</strong> rg-agentops-demo</p>
         <p><strong>VM:</strong> vm-agentops-demo · Central India</p>
         <p><strong>Deployment date:</strong> 6 November 2026</p>
-        <p><strong>Final deployed commit:</strong> 15f1212</p>
+        <p><strong>Baseline deployment commit:</strong> 15f1212</p>
+        <p><strong>Verified automatic-deployment commit:</strong> ba65c1b</p>
       </div>
       <p class="footer-note">
         Prepared as a reproducible deployment record. Generated passwords and the SSH private key
@@ -180,6 +287,7 @@
       <li><a href="#verify">Deployment verification</a></li>
       <li><a href="#budget">Create the Azure budget</a></li>
       <li><a href="#railway">Railway cleanup</a></li>
+      <li><a href="#cicd">Automatic CI/CD with GitHub Actions and Azure OIDC</a></li>
       <li><a href="#operations">Daily operations and maintenance</a></li>
       <li><a href="#security">Security, limitations, and shutdown</a></li>
     </ol>
@@ -189,6 +297,28 @@
       <strong>Deployment result:</strong> the full Milestone 0 application is running successfully
       on one Azure Linux VM. The frontend, API, AI service, PostgreSQL, and Redis containers start
       automatically after reboot.
+    </div>
+    <div class="visual">
+      <div class="visual-title">Visual memory map — what is running on the VM</div>
+      <div class="flow">
+        <div class="box"><strong>Browser</strong><br />Public internet</div>
+        <div class="arrow">→</div>
+        <div class="box">
+          <strong>Web</strong><br />React + Nginx<br /><span class="badge">3000</span>
+        </div>
+        <div class="arrow">→</div>
+        <div class="box">
+          <strong>API</strong><br />Fastify<br /><span class="badge">3001</span>
+        </div>
+        <div class="arrow">→</div>
+        <div class="box">
+          <strong>Private services</strong><br />AI 8000<br />Postgres 5432<br />Redis 6379
+        </div>
+      </div>
+      <p class="small">
+        Only 3000 and 3001 pass through the Azure NSG. The remaining services communicate on the
+        private Docker Compose network.
+      </p>
     </div>
     <table>
       <tr>
@@ -309,6 +439,29 @@
     </ol>
 
     <h2 id="tabs">4. Exact settings on every Azure VM tab</h2>
+    <div class="visual">
+      <div class="visual-title">Visual memory map — Azure Create VM tabs</div>
+      <div class="tabstrip">
+        <div class="tabcard">
+          <strong>1 · Basics</strong>Name, region, Ubuntu x64, B2ls v2, SSH key
+        </div>
+        <div class="tabcard"><strong>2 · Disks</strong>30 GiB Standard SSD, delete with VM</div>
+        <div class="tabcard">
+          <strong>3 · Networking</strong>VNet, subnet, public IP, advanced NSG
+        </div>
+        <div class="tabcard">
+          <strong>4 · Management</strong>Managed identity on; Entra login off
+        </div>
+        <div class="tabcard">
+          <strong>5 · Monitoring</strong>Boot diagnostics on; other extras off
+        </div>
+        <div class="tabcard"><strong>6 · Advanced</strong>Cloud-init in Custom data</div>
+        <div class="tabcard"><strong>7 · Tags</strong>application, environment, milestone</div>
+        <div class="tabcard">
+          <strong>8 · Review</strong>Validate price/settings, create, download key
+        </div>
+      </div>
+    </div>
     <h3>4.1 Basics</h3>
     <table>
       <tr>
@@ -472,6 +625,25 @@
         <td>None</td>
       </tr>
     </table>
+    <div class="visual">
+      <div class="visual-title">Visual memory map — the two inbound rules we created</div>
+      <div class="network-grid">
+        <div class="rule ssh">
+          <strong>Rule 1 · Restricted SSH</strong>
+          <div class="port">TCP 22</div>
+          <p>Source: <code>115.97.8.157/32</code><br />Priority: 900<br />Only your public IP</p>
+        </div>
+        <div class="rule">
+          <strong>Rule 2 · Public application</strong>
+          <div class="port">TCP 3000, 3001</div>
+          <p>Source: Any<br />Priority: 1010<br />Frontend + API only</p>
+        </div>
+      </div>
+      <p class="small">
+        <strong>Never open:</strong> 8000, 5432, or 6379. If your home IP changes, update only the
+        SSH source /32.
+      </p>
+    </div>
     <h3>Inbound rule 1 — restricted SSH</h3>
     <table>
       <tr>
@@ -844,7 +1016,201 @@ curl -fsS http://127.0.0.1:8000/health</code></pre>
       <li>Verify that the old project and resources no longer appear.</li>
     </ol>
 
-    <h2 id="operations">11. Daily operations and maintenance</h2>
+    <h2 id="cicd" class="pagebreak">11. Automatic CI/CD with GitHub Actions and Azure OIDC</h2>
+    <div class="success callout">
+      <strong>Verified result:</strong> a push to <code>main</code> runs CI first. Only after CI
+      succeeds does GitHub authenticate to Azure without a stored password, ask Azure Run Command to
+      deploy the exact tested commit, rebuild the containers, and run health checks.
+    </div>
+    <div class="visual">
+      <div class="visual-title">Visual memory map — automatic delivery path</div>
+      <div class="pipeline">
+        <div class="stage">
+          <span class="stage-number">1</span><br /><strong>Push to main</strong><br />GitHub
+          receives the new commit.
+        </div>
+        <div class="stage">
+          <span class="stage-number">2</span><br /><strong>CI quality gates</strong
+          ><br />Formatting, ESLint, TypeScript, Node/Python tests, builds, Compose validation.
+        </div>
+        <div class="stage">
+          <span class="stage-number">3</span><br /><strong>workflow_run</strong><br />Deploy starts
+          only when CI conclusion is success.
+        </div>
+        <div class="stage">
+          <span class="stage-number">4</span><br /><strong>OIDC login</strong><br />GitHub exchanges
+          a short-lived token with Microsoft Entra ID.
+        </div>
+        <div class="stage">
+          <span class="stage-number">5</span><br /><strong>Azure Run Command</strong><br />Executes
+          inside <code>vm-agentops-demo</code>; no SSH key is stored in GitHub.
+        </div>
+        <div class="stage">
+          <span class="stage-number">6</span><br /><strong>Deploy + verify</strong
+          ><br />Fast-forward exact SHA, build, restart, check frontend and API readiness.
+        </div>
+      </div>
+    </div>
+
+    <h3>11.1 Why OIDC was used instead of a self-hosted runner</h3>
+    <p>
+      The repository is public. A self-hosted runner attached to a public repository increases the
+      risk that untrusted workflow code reaches the VM. The final design uses a GitHub-hosted runner
+      plus Azure OpenID Connect. It stores no Azure client secret and no SSH private key in GitHub.
+    </p>
+
+    <h3>11.2 Azure identity created in Cloud Shell</h3>
+    <p>
+      Cloud Shell was first registered under Subscription → Resource providers →
+      <code>Microsoft.CloudShell</code>. An app registration and service principal were then created
+      for <code>github-agentops-deploy</code>.
+    </p>
+    <pre><code>az ad app list \
+  --display-name "github-agentops-deploy" \
+  --query '[0].{clientId:appId,objectId:id}' \
+  --output json
+
+az ad sp list \
+  --filter "appId eq '&lt;AZURE_CLIENT_ID&gt;'" \
+  --query '[0].{servicePrincipalId:id,clientId:appId}' \
+  --output json</code></pre>
+    <p>
+      The federated credential was created with the issuer
+      <code>https://token.actions.githubusercontent.com</code>, audience
+      <code>api://AzureADTokenExchange</code>, and the exact subject printed by the GitHub Actions
+      login log:
+    </p>
+    <pre><code>az ad app federated-credential create \
+  --id "&lt;APPLICATION_OBJECT_ID&gt;" \
+  --parameters '{
+    "name": "github-agentops-azure-production",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject": "repo:hafiz475@87468194/agentops-ai-workflow-platform@1447357531:environment:azure-production",
+    "audiences": ["api://AzureADTokenExchange"]
+  }'</code></pre>
+    <div class="warning callout">
+      <strong>Important distinction:</strong> GitHub’s <code>AZURE_CLIENT_ID</code> must contain the
+      application/client ID, not the application object ID or service-principal object ID.
+      Registration tokens and private keys must never be copied into this guide.
+    </div>
+
+    <h3>11.3 Least-privilege Azure role</h3>
+    <p>
+      The service principal received <strong>Virtual Machine Contributor</strong> only on
+      <code>vm-agentops-demo</code>, not on the subscription or entire resource group.
+    </p>
+    <pre><code>VM_ID="$(az vm show --resource-group rg-agentops-demo \
+  --name vm-agentops-demo --query id -o tsv)"
+
+az role assignment create \
+  --assignee-object-id "&lt;SERVICE_PRINCIPAL_OBJECT_ID&gt;" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Virtual Machine Contributor" \
+  --scope "$VM_ID"</code></pre>
+
+    <h3>11.4 GitHub repository configuration</h3>
+    <p>Repository → Settings → Secrets and variables → Actions:</p>
+    <table>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Purpose</th>
+      </tr>
+      <tr>
+        <td>Secret</td>
+        <td><code>AZURE_CLIENT_ID</code></td>
+        <td>Microsoft Entra application/client ID.</td>
+      </tr>
+      <tr>
+        <td>Secret</td>
+        <td><code>AZURE_TENANT_ID</code></td>
+        <td>Directory/tenant containing the app registration.</td>
+      </tr>
+      <tr>
+        <td>Secret</td>
+        <td><code>AZURE_SUBSCRIPTION_ID</code></td>
+        <td>Subscription containing the VM.</td>
+      </tr>
+      <tr>
+        <td>Variable</td>
+        <td><code>AZURE_VM_DEPLOY_ENABLED=true</code></td>
+        <td>Emergency enable/disable gate for deployments.</td>
+      </tr>
+    </table>
+    <p>
+      A GitHub environment named <code>azure-production</code> matches the federated credential
+      subject.
+    </p>
+
+    <h3>11.5 Workflow behavior</h3>
+    <p>
+      The workflow is stored at <code>.github/workflows/deploy-azure.yml</code>. It uses
+      <code>id-token: write</code>, runs on GitHub-hosted Ubuntu, logs in with
+      <code>azure/login@v2</code>, and invokes Azure CLI Run Command against the VM.
+    </p>
+    <pre><code>on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    if: vars.AZURE_VM_DEPLOY_ENABLED == 'true' &amp;&amp;
+        (github.event_name == 'workflow_dispatch' ||
+         github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment: azure-production</code></pre>
+
+    <h3>11.6 Safe deployment script on the VM</h3>
+    <p>
+      <code>scripts/deploy-azure-vm.sh</code> rejects an invalid SHA, refuses a dirty production
+      checkout, verifies the SHA belongs to <code>origin/main</code>, fast-forwards to that exact
+      tested commit, rebuilds Compose, starts services, and waits for both endpoints:
+    </p>
+    <pre><code>http://127.0.0.1:3001/ready
+http://127.0.0.1:3000/</code></pre>
+    <p>
+      If verification fails, it prints container status and recent API/web logs and exits non-zero,
+      making the GitHub deployment red.
+    </p>
+
+    <h3>11.7 Failure encountered and exact fix</h3>
+    <p>The first OIDC login failed with <code>AADSTS700016</code>. Two values were corrected:</p>
+    <ol>
+      <li>The GitHub secret was updated to the true application/client ID.</li>
+      <li>
+        The federated subject was replaced with the exact subject claim shown in the failed GitHub
+        login log, including GitHub’s repository owner and repository numeric identifiers.
+      </li>
+    </ol>
+    <p>
+      After these corrections, the manual deployment passed. A later push passed CI and
+      automatically triggered the Azure deployment, proving the complete chain.
+    </p>
+
+    <h3>11.8 How to operate the pipeline</h3>
+    <ul>
+      <li>
+        <strong>Normal use:</strong> push or merge to <code>main</code>; no manual Azure action is
+        needed.
+      </li>
+      <li><strong>Manual retry:</strong> Actions → Deploy Azure VM → Run workflow.</li>
+      <li>
+        <strong>Emergency pause:</strong> set <code>AZURE_VM_DEPLOY_ENABLED</code> to
+        <code>false</code>.
+      </li>
+      <li>
+        <strong>Verify:</strong> confirm both CI and Deploy Azure VM are green, then open the
+        frontend, <code>/health</code>, and <code>/ready</code>.
+      </li>
+    </ul>
+    <h2 id="operations">12. Daily operations and maintenance</h2>
     <h3>Check status</h3>
     <pre><code>cd /opt/agentops-ai-workflow-platform
 sudo docker compose ps
@@ -871,7 +1237,7 @@ sudo docker compose ps</code></pre>
       Overview page before using the URLs.
     </p>
 
-    <h2 id="security">12. Security, limitations, and final checklist</h2>
+    <h2 id="security">13. Security, limitations, and final checklist</h2>
     <h3>Security controls in place</h3>
     <ul>
       <li>SSH key authentication; no password login.</li>
@@ -938,9 +1304,17 @@ sudo docker compose ps</code></pre>
         <td class="check">Complete</td>
         <td>Unused Railway project deleted</td>
       </tr>
+      <tr>
+        <td class="check">Complete</td>
+        <td>GitHub OIDC identity and VM-scoped role configured</td>
+      </tr>
+      <tr>
+        <td class="check">Complete</td>
+        <td>Manual and automatic CI/CD deployments verified</td>
+      </tr>
     </table>
     <p class="footer-note">
-      End of runbook · AgentOps Studio Milestone 0 · Azure single-VM deployment
+      End of runbook · AgentOps Studio Milestone 0 · Azure VM deployment and GitHub OIDC CI/CD
     </p>
   </body>
 </html>
