@@ -1,0 +1,49 @@
+name: Deploy Azure VM
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: azure-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to AgentOps Azure VM
+    if: >-
+      vars.AZURE_VM_DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success')
+    runs-on: [self-hosted, linux, x64, agentops-production]
+    timeout-minutes: 30
+    environment: azure-production
+    steps:
+      - name: Resolve commit to deploy
+        id: deployment
+        shell: bash
+        env:
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            echo "sha=${WORKFLOW_RUN_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out deployment automation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.deployment.outputs.sha }}
+
+      - name: Deploy and verify
+        env:
+          DEPLOY_SHA: ${{ steps.deployment.outputs.sha }}
+        run: ./scripts/deploy-azure-vm.sh "$DEPLOY_SHA"
+
