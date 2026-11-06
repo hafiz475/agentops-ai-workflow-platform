@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>AgentOps Studio — Azure VM Setup and Deployment Runbook</title>
+    <title>
+      AgentOps Studio &mdash; Azure Deployment, CI/CD &amp; AI Workflow Execution Runbook
+    </title>
     <style>
       @page {
         size: A4;
@@ -250,24 +252,52 @@
         font-weight: 700;
         margin-bottom: 2mm;
       }
+      .plane-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4mm;
+        margin: 4mm 0;
+      }
+      .plane {
+        border: 1px solid #8cb8dd;
+        border-radius: 7px;
+        background: #fff;
+        padding: 4mm;
+        page-break-inside: avoid;
+      }
+      .plane h3 {
+        margin-top: 0;
+      }
+      .vertical-flow {
+        text-align: center;
+        font-weight: 600;
+        line-height: 1.75;
+        color: #233b55;
+      }
+      .vertical-flow .arrow-down {
+        display: block;
+        color: #1685d1;
+        font-size: 15pt;
+        line-height: 1;
+      }
     </style>
   </head>
   <body>
     <section class="cover">
-      <div class="eyebrow">Deployment Runbook · Milestone 0</div>
-      <h1>AgentOps Studio<br />Azure VM Setup, Deployment &amp; CI/CD</h1>
+      <div class="eyebrow">Deployment Runbook &middot; Milestone 1</div>
+      <h1>AgentOps Studio<br />Azure Deployment, CI/CD &amp;<br />AI Workflow Execution Runbook</h1>
       <div class="subtitle">
-        The complete visual, tab-by-tab configuration, Linux deployment, troubleshooting,
-        verification, CI/CD, cost budget, and cleanup record
+        Visual architecture, tab-by-tab VM setup, Linux deployment, verification, CI/CD, AI workflow
+        execution, cost budget, and operations record
       </div>
       <div class="meta">
         <p><strong>Application:</strong> AgentOps Studio</p>
         <p><strong>Repository:</strong> hafiz475/agentops-ai-workflow-platform</p>
         <p><strong>Azure resource group:</strong> rg-agentops-demo</p>
-        <p><strong>VM:</strong> vm-agentops-demo · Central India</p>
+        <p><strong>VM:</strong> vm-agentops-demo &middot; Central India</p>
         <p><strong>Deployment date:</strong> 6 November 2026</p>
-        <p><strong>Baseline deployment commit:</strong> 15f1212</p>
-        <p><strong>Verified automatic-deployment commit:</strong> ba65c1b</p>
+        <p><strong>Milestone 0 deployment baseline:</strong> 15f1212</p>
+        <p><strong>Milestone 1 application commit:</strong> 2ac3732</p>
       </div>
       <p class="footer-note">
         Prepared as a reproducible deployment record. Generated passwords and the SSH private key
@@ -278,6 +308,7 @@
     <h2>Contents</h2>
     <ol class="toc">
       <li><a href="#outcome">Final outcome and architecture</a></li>
+      <li><a href="#milestone1">Milestone 1 &mdash; AI Workflow Execution</a></li>
       <li><a href="#decisions">Why this deployment design was chosen</a></li>
       <li><a href="#create">Create the Azure virtual machine</a></li>
       <li><a href="#tabs">Exact settings on every Azure VM tab</a></li>
@@ -294,36 +325,50 @@
 
     <h2 id="outcome">1. Final outcome and architecture</h2>
     <div class="success callout">
-      <strong>Deployment result:</strong> the full Milestone 0 application is running successfully
-      on one Azure Linux VM. The frontend, API, AI service, PostgreSQL, and Redis containers start
-      automatically after reboot.
+      <strong>Deployment result:</strong> the complete Milestone 1 application is running
+      successfully on one Azure Linux VM. It now provides functional project and workflow creation,
+      visual editing, immutable versioning, execution, persisted node results, and trace timelines.
+      All five containers start automatically after reboot.
     </div>
     <div class="visual">
-      <div class="visual-title">Visual memory map — what is running on the VM</div>
+      <div class="visual-title">Milestone 1 request and persistence architecture</div>
       <div class="flow">
         <div class="box"><strong>Browser</strong><br />Public internet</div>
-        <div class="arrow">→</div>
+        <div class="arrow">&rarr;</div>
         <div class="box">
-          <strong>Web</strong><br />React + Nginx<br /><span class="badge">3000</span>
+          <strong>Frontend</strong><br />React + ReactFlow<br />Nginx &middot;
+          <span class="badge">3000</span>
         </div>
-        <div class="arrow">→</div>
+        <div class="arrow">&rarr;</div>
         <div class="box">
-          <strong>API</strong><br />Fastify<br /><span class="badge">3001</span>
+          <strong>Control plane</strong><br />Node.js + Fastify<br /><span class="badge">3001</span>
         </div>
-        <div class="arrow">→</div>
+        <div class="arrow">&rarr;</div>
         <div class="box">
-          <strong>Private services</strong><br />AI 8000<br />Postgres 5432<br />Redis 6379
+          <strong>PostgreSQL</strong><br />Versions, runs,<br />node results, traces
+        </div>
+      </div>
+      <div class="flow" style="margin-top: 3mm">
+        <div class="box"><strong>Fastify control plane</strong><br />Typed internal contract</div>
+        <div class="arrow">&rarr;</div>
+        <div class="box"><strong>FastAPI AI service</strong><br />Private port 8000</div>
+        <div class="arrow">&rarr;</div>
+        <div class="box">
+          <strong>AI provider abstraction</strong><br />Deterministic development provider<br />OpenAI
+          provider adapter
         </div>
       </div>
       <p class="small">
-        Only 3000 and 3001 pass through the Azure NSG. The remaining services communicate on the
-        private Docker Compose network.
+        The browser never calls Python directly. Fastify owns orchestration and calls FastAPI over
+        the private typed contract only for model execution. Redis remains part of the platform
+        infrastructure on the private Compose network. Only ports 3000 and 3001 pass through the
+        Azure NSG.
       </p>
     </div>
     <table>
       <tr>
         <th>Item</th>
-        <th>Final value</th>
+        <th>Current value</th>
       </tr>
       <tr>
         <td>Resource group</td>
@@ -339,59 +384,155 @@
       </tr>
       <tr>
         <td>VM size</td>
-        <td>Standard B2ls v2 — 2 vCPUs, 4 GiB RAM</td>
+        <td>Standard B2ls v2 &mdash; 2 vCPUs, 4 GiB RAM</td>
       </tr>
       <tr>
-        <td>Public IP at deployment</td>
+        <td>Public IP at verification</td>
         <td><code>4.247.145.108</code></td>
       </tr>
       <tr>
         <td>Frontend</td>
-        <td><code>http://4.247.145.108:3000/</code></td>
+        <td><a href="http://4.247.145.108:3000/">http://4.247.145.108:3000/</a></td>
       </tr>
       <tr>
         <td>API health</td>
-        <td><code>http://4.247.145.108:3001/health</code></td>
+        <td><a href="http://4.247.145.108:3001/health">http://4.247.145.108:3001/health</a></td>
       </tr>
       <tr>
         <td>API readiness</td>
-        <td><code>http://4.247.145.108:3001/ready</code></td>
+        <td><a href="http://4.247.145.108:3001/ready">http://4.247.145.108:3001/ready</a></td>
       </tr>
     </table>
     <table>
       <tr>
         <th>Container</th>
-        <th>Purpose</th>
+        <th>Milestone 1 purpose</th>
         <th>Port exposure</th>
       </tr>
       <tr>
         <td>web</td>
-        <td>React/Vite production build served by Nginx</td>
-        <td>Public TCP 3000 → container 80</td>
+        <td>React/ReactFlow visual workflow editor served by Nginx</td>
+        <td>Public TCP 3000 &rarr; container 80</td>
       </tr>
       <tr>
         <td>api</td>
-        <td>Fastify control-plane API</td>
+        <td>Fastify control plane: validation, versioning, orchestration, persistence, traces</td>
         <td>Public TCP 3001</td>
       </tr>
       <tr>
         <td>ai-service</td>
-        <td>FastAPI execution service</td>
+        <td>FastAPI model execution and AI provider abstraction</td>
         <td>Host 8000; blocked by Azure NSG</td>
       </tr>
       <tr>
         <td>postgres</td>
-        <td>PostgreSQL 16 data store</td>
+        <td>Projects, workflows, versions, runs, node results, and trace data</td>
         <td>Private Compose network only, 5432</td>
       </tr>
       <tr>
         <td>redis</td>
-        <td>Redis 7 cache/coordination</td>
+        <td>Platform cache and coordination infrastructure</td>
         <td>Private Compose network only, 6379</td>
       </tr>
     </table>
 
-    <h2 id="decisions">2. Why this design was chosen</h2>
+    <h2 id="milestone1">2. Milestone 1 &mdash; AI Workflow Execution</h2>
+    <p>
+      ReactFlow provides the visual editor. A workflow currently contains exactly the supported
+      building blocks needed for the first complete vertical slice: <strong>INPUT</strong>,
+      <strong>PROMPT</strong>, <strong>LLM</strong>, and <strong>OUTPUT</strong> nodes.
+    </p>
+    <div class="visual">
+      <div class="visual-title">Example workflow and execution lifecycle</div>
+      <div class="flow">
+        <div class="box"><strong>User input</strong></div>
+        <div class="arrow">&rarr;</div>
+        <div class="box"><strong>INPUT</strong></div>
+        <div class="arrow">&rarr;</div>
+        <div class="box"><strong>PROMPT</strong></div>
+        <div class="arrow">&rarr;</div>
+        <div class="box"><strong>LLM</strong></div>
+        <div class="arrow">&rarr;</div>
+        <div class="box"><strong>OUTPUT</strong></div>
+      </div>
+      <div class="vertical-flow" style="margin-top: 4mm">
+        Workflow validation <span class="arrow-down">&darr;</span> Immutable WorkflowVersion
+        <span class="arrow-down">&darr;</span> Run created &rarr; NodeRuns
+        <span class="arrow-down">&darr;</span> Fastify calls Python through the typed internal
+        contract <span class="arrow-down">&darr;</span> AI provider returns the model result
+        <span class="arrow-down">&darr;</span> Final output and trace events are persisted
+        <span class="arrow-down">&darr;</span>
+        Trace timeline is displayed in the browser
+      </div>
+    </div>
+    <p>
+      Before a version can be created, graph validation checks node configuration, edge references,
+      connectivity, reachability, supported node cardinality, prompt variables, and cycles. Saved
+      workflow versions are immutable. A run executes the selected version using deterministic
+      topological ordering. Run state, node-level status, node inputs, node outputs, failures, final
+      output, and trace events are persisted in PostgreSQL.
+    </p>
+    <div class="plane-grid">
+      <div class="plane">
+        <h3>CONTROL PLANE &mdash; Node.js + Fastify</h3>
+        <ul>
+          <li>Projects and workflows</li>
+          <li>Immutable versions</li>
+          <li>Graph validation</li>
+          <li>Run orchestration and deterministic ordering</li>
+          <li>Persistence and trace timelines</li>
+        </ul>
+      </div>
+      <div class="plane">
+        <h3>AI EXECUTION PLANE &mdash; Python + FastAPI</h3>
+        <ul>
+          <li>AI provider abstraction</li>
+          <li>Model invocation</li>
+          <li>Provider-specific integration</li>
+          <li>Deterministic development provider</li>
+          <li>OpenAI provider adapter</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout">
+      <strong>Credential-free development:</strong> the deterministic development provider enables
+      reliable local, CI, and demo execution without external AI credentials. The OpenAI adapter is
+      available for real model execution when deployment configuration supplies credentials.
+      Provider credentials must never be embedded in source code or documentation.
+    </div>
+    <h3>Milestone 1 verification record</h3>
+    <table>
+      <tr>
+        <th>Verification</th>
+        <th>Result</th>
+      </tr>
+      <tr>
+        <td>GitHub CI / Azure deployment / deployment smoke checks</td>
+        <td class="check">Passed</td>
+      </tr>
+      <tr>
+        <td>Node tests</td>
+        <td class="check">23 passed</td>
+      </tr>
+      <tr>
+        <td>Python tests</td>
+        <td class="check">7 passed</td>
+      </tr>
+      <tr>
+        <td>Formatting, ESLint, TypeScript strict checks</td>
+        <td class="check">Passed</td>
+      </tr>
+      <tr>
+        <td>Ruff and mypy</td>
+        <td class="check">Passed</td>
+      </tr>
+      <tr>
+        <td>Production builds and Docker Compose validation</td>
+        <td class="check">Passed</td>
+      </tr>
+    </table>
+
+    <h2 id="decisions">3. Why this design was chosen</h2>
     <ul>
       <li>
         <strong>One VM:</strong> Railway's free-plan resource limit could not host the API, AI
@@ -408,8 +549,8 @@
         4 GiB RAM.
       </li>
       <li>
-        <strong>Standard SSD:</strong> enough for a Milestone 0 demo while keeping storage cost
-        lower than Premium SSD.
+        <strong>Standard SSD:</strong> enough for the single-VM portfolio/demo deployment while
+        keeping storage cost lower than Premium SSD.
       </li>
       <li>
         <strong>Ports 3000 and 3001 only:</strong> users need the frontend and API. PostgreSQL,
@@ -424,7 +565,7 @@
       </li>
     </ul>
 
-    <h2 id="create">3. Create the Azure virtual machine</h2>
+    <h2 id="create">4. Create the Azure virtual machine</h2>
     <ol>
       <li>Sign in to the Azure portal.</li>
       <li>Use the top search bar to search for <strong>Virtual machines</strong>.</li>
@@ -438,7 +579,7 @@
       </li>
     </ol>
 
-    <h2 id="tabs">4. Exact settings on every Azure VM tab</h2>
+    <h2 id="tabs">5. Exact settings on every Azure VM tab</h2>
     <div class="visual">
       <div class="visual-title">Visual memory map — Azure Create VM tabs</div>
       <div class="tabstrip">
@@ -833,7 +974,7 @@
       </li>
     </ol>
 
-    <h2 id="deploy" class="pagebreak">5. Cloud-init and Linux deployment</h2>
+    <h2 id="deploy" class="pagebreak">6. Cloud-init and Linux deployment</h2>
     <p>
       The VM bootstrap installed Git, Docker Engine, and Docker Compose v2; cloned the
       <code>main</code> branch; created a protected <code>.env</code> with a generated PostgreSQL
@@ -883,7 +1024,7 @@ docker compose ps</code></pre>
       <code>0.0.0.0/0</code>.
     </p>
 
-    <h2 id="systemd">6. Automatic startup with systemd</h2>
+    <h2 id="systemd">7. Automatic startup with systemd</h2>
     <p>A service unit was created at <code>/etc/systemd/system/agentops-compose.service</code>:</p>
     <pre><code>[Unit]
 Description=AgentOps Studio Docker Compose
@@ -909,7 +1050,7 @@ sudo systemctl status agentops-compose.service --no-pager</code></pre>
       Compose application in dependency order.
     </p>
 
-    <h2 id="troubleshoot">7. API health-check failure and permanent fix</h2>
+    <h2 id="troubleshoot">8. API health-check failure and permanent fix</h2>
     <h3>Observed symptoms</h3>
     <ul>
       <li>PostgreSQL, Redis, and the AI service were healthy.</li>
@@ -952,7 +1093,7 @@ sudo docker compose ps</code></pre>
       truth.
     </p>
 
-    <h2 id="verify">8. Deployment verification</h2>
+    <h2 id="verify">9. Deployment verification</h2>
     <h3>On the VM</h3>
     <pre><code>cd /opt/agentops-ai-workflow-platform
 sudo docker compose ps
@@ -979,7 +1120,7 @@ curl -fsS http://127.0.0.1:8000/health</code></pre>
       frontend reachable, and both API probes returning OK.
     </div>
 
-    <h2 id="budget">9. Create the Azure budget</h2>
+    <h2 id="budget">10. Create the Azure budget</h2>
     <ol>
       <li>In Azure, open <strong>Resource groups</strong>.</li>
       <li>Open <code>rg-agentops-demo</code>.</li>
@@ -1003,7 +1144,7 @@ curl -fsS http://127.0.0.1:8000/health</code></pre>
       stop the VM or prevent charges. Stop/deallocate or delete resources when they are not needed.
     </div>
 
-    <h2 id="railway">10. Railway cleanup</h2>
+    <h2 id="railway">11. Railway cleanup</h2>
     <p>
       After Azure was fully verified, the unused Railway project was deleted. This removed the
       Railway PostgreSQL and Redis instances, their volumes, and the staged API service. It did not
@@ -1016,11 +1157,12 @@ curl -fsS http://127.0.0.1:8000/health</code></pre>
       <li>Verify that the old project and resources no longer appear.</li>
     </ol>
 
-    <h2 id="cicd" class="pagebreak">11. Automatic CI/CD with GitHub Actions and Azure OIDC</h2>
+    <h2 id="cicd" class="pagebreak">12. Automatic CI/CD with GitHub Actions and Azure OIDC</h2>
     <div class="success callout">
-      <strong>Verified result:</strong> a push to <code>main</code> runs CI first. Only after CI
-      succeeds does GitHub authenticate to Azure without a stored password, ask Azure Run Command to
-      deploy the exact tested commit, rebuild the containers, and run health checks.
+      <strong>Verified Milestone 1 result:</strong> a push to <code>main</code> runs CI first. Only
+      after CI succeeds does GitHub authenticate to Azure without a stored password, ask Azure Run
+      Command to deploy the exact tested commit, rebuild the containers, apply database migrations
+      during API startup, restart the Milestone 1 application, and run health checks.
     </div>
     <div class="visual">
       <div class="visual-title">Visual memory map — automatic delivery path</div>
@@ -1052,14 +1194,14 @@ curl -fsS http://127.0.0.1:8000/health</code></pre>
       </div>
     </div>
 
-    <h3>11.1 Why OIDC was used instead of a self-hosted runner</h3>
+    <h3>12.1 Why OIDC was used instead of a self-hosted runner</h3>
     <p>
       The repository is public. A self-hosted runner attached to a public repository increases the
       risk that untrusted workflow code reaches the VM. The final design uses a GitHub-hosted runner
       plus Azure OpenID Connect. It stores no Azure client secret and no SSH private key in GitHub.
     </p>
 
-    <h3>11.2 Azure identity created in Cloud Shell</h3>
+    <h3>12.2 Azure identity created in Cloud Shell</h3>
     <p>
       Cloud Shell was first registered under Subscription → Resource providers →
       <code>Microsoft.CloudShell</code>. An app registration and service principal were then created
@@ -1094,7 +1236,7 @@ az ad sp list \
       Registration tokens and private keys must never be copied into this guide.
     </div>
 
-    <h3>11.3 Least-privilege Azure role</h3>
+    <h3>12.3 Least-privilege Azure role</h3>
     <p>
       The service principal received <strong>Virtual Machine Contributor</strong> only on
       <code>vm-agentops-demo</code>, not on the subscription or entire resource group.
@@ -1108,7 +1250,7 @@ az role assignment create \
   --role "Virtual Machine Contributor" \
   --scope "$VM_ID"</code></pre>
 
-    <h3>11.4 GitHub repository configuration</h3>
+    <h3>12.4 GitHub repository configuration</h3>
     <p>Repository → Settings → Secrets and variables → Actions:</p>
     <table>
       <tr>
@@ -1142,7 +1284,7 @@ az role assignment create \
       subject.
     </p>
 
-    <h3>11.5 Workflow behavior</h3>
+    <h3>12.5 Workflow behavior</h3>
     <p>
       The workflow is stored at <code>.github/workflows/deploy-azure.yml</code>. It uses
       <code>id-token: write</code>, runs on GitHub-hosted Ubuntu, logs in with
@@ -1167,7 +1309,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: azure-production</code></pre>
 
-    <h3>11.6 Safe deployment script on the VM</h3>
+    <h3>12.6 Safe deployment script on the VM</h3>
     <p>
       <code>scripts/deploy-azure-vm.sh</code> rejects an invalid SHA, refuses a dirty production
       checkout, verifies the SHA belongs to <code>origin/main</code>, fast-forwards to that exact
@@ -1180,7 +1322,7 @@ http://127.0.0.1:3000/</code></pre>
       making the GitHub deployment red.
     </p>
 
-    <h3>11.7 Failure encountered and exact fix</h3>
+    <h3>12.7 Failure encountered and exact fix</h3>
     <p>The first OIDC login failed with <code>AADSTS700016</code>. Two values were corrected:</p>
     <ol>
       <li>The GitHub secret was updated to the true application/client ID.</li>
@@ -1194,7 +1336,7 @@ http://127.0.0.1:3000/</code></pre>
       automatically triggered the Azure deployment, proving the complete chain.
     </p>
 
-    <h3>11.8 How to operate the pipeline</h3>
+    <h3>12.8 How to operate the pipeline</h3>
     <ul>
       <li>
         <strong>Normal use:</strong> push or merge to <code>main</code>; no manual Azure action is
@@ -1210,7 +1352,7 @@ http://127.0.0.1:3000/</code></pre>
         frontend, <code>/health</code>, and <code>/ready</code>.
       </li>
     </ul>
-    <h2 id="operations">12. Daily operations and maintenance</h2>
+    <h2 id="operations">13. Daily operations and maintenance</h2>
     <h3>Check status</h3>
     <pre><code>cd /opt/agentops-ai-workflow-platform
 sudo docker compose ps
@@ -1237,7 +1379,7 @@ sudo docker compose ps</code></pre>
       Overview page before using the URLs.
     </p>
 
-    <h2 id="security">13. Security, limitations, and final checklist</h2>
+    <h2 id="security">14. Security, limitations, and final checklist</h2>
     <h3>Security controls in place</h3>
     <ul>
       <li>SSH key authentication; no password login.</li>
@@ -1250,19 +1392,22 @@ sudo docker compose ps</code></pre>
     </ul>
     <h3>Current limitations</h3>
     <ul>
-      <li>The site uses raw HTTP and a public IP; HTTPS and a domain are not configured.</li>
-      <li>Milestone 0 has no application authentication or authorization.</li>
       <li>
-        The frontend is a dashboard shell; workflow execution/model invocation belongs to later
-        milestones.
+        The deployment currently uses HTTP and a raw public IP; HTTPS and a domain are not
+        configured.
       </li>
+      <li>Application authentication and authorization are still planned.</li>
       <li>
-        One VM is a single point of failure and is intended for a demo, not a highly available
-        production deployment.
+        Workflow execution runs asynchronously inside the Fastify API process instead of a durable
+        worker queue.
       </li>
+      <li>Only INPUT, PROMPT, LLM, and OUTPUT node types are currently supported.</li>
+      <li>RAG, tools, conditions, human approval, and evaluations are not yet implemented.</li>
+      <li>The single-VM portfolio/demo architecture is not highly available.</li>
+      <li>PostgreSQL and Redis use Docker volumes on the VM.</li>
+      <li>Independent production backup and recovery are not yet configured.</li>
       <li>
-        PostgreSQL and Redis data reside in Docker volumes on the VM's OS disk; no independent
-        backup was configured.
+        Provider credentials are deployment configuration and must never appear in documentation.
       </li>
       <li>The Azure promotional credit expires; the budget only alerts.</li>
     </ul>
@@ -1310,11 +1455,14 @@ sudo docker compose ps</code></pre>
       </tr>
       <tr>
         <td class="check">Complete</td>
-        <td>Manual and automatic CI/CD deployments verified</td>
+        <td>
+          Milestone 1 CI and automatic Azure deployment verified for commit <code>2ac3732</code>
+        </td>
       </tr>
     </table>
     <p class="footer-note">
-      End of runbook · AgentOps Studio Milestone 0 · Azure VM deployment and GitHub OIDC CI/CD
+      End of runbook &middot; AgentOps Studio Milestone 1 &middot; Azure deployment, GitHub OIDC
+      CI/CD, and AI workflow execution
     </p>
   </body>
 </html>
