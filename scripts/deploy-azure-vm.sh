@@ -70,3 +70,4 @@ fi
 
 "${compose[@]}" ps
 echo "Successfully deployed ${deploy_sha}."
+echo "DEPLOYMENT_SUCCEEDED_SHA=${deploy_sha}"

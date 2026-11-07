@@ -70,4 +70,4 @@ jobs:
               --query 'value[0].message' \
               --output tsv | tee deployment-output.txt
 
-            grep -q 'Enable succeeded' deployment-output.txt
+            grep -Fq "DEPLOYMENT_SUCCEEDED_SHA=${DEPLOY_SHA}" deployment-output.txt
