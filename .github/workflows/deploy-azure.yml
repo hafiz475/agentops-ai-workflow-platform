@@ -53,12 +53,12 @@ jobs:
           inlineScript: |
             set -Eeuo pipefail
             deployment_script="$(cat <<EOF
-            set -Eeuo pipefail
+            set -eu
             cd /opt/agentops-ai-workflow-platform
             git fetch --prune origin main
             git checkout main
             git merge --ff-only ${DEPLOY_SHA}
-            ./scripts/deploy-azure-vm.sh ${DEPLOY_SHA}
+            bash ./scripts/deploy-azure-vm.sh ${DEPLOY_SHA}
             EOF
             )"
 
