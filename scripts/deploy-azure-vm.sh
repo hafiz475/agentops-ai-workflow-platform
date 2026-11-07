@@ -29,11 +29,17 @@ echo "Fast-forwarding production checkout to ${deploy_sha}..."
 sudo -n git checkout main
 sudo -n git merge --ff-only "${deploy_sha}"
 
-echo "Building images..."
-"${compose[@]}" build
+readonly actual_sha="$(sudo -n git rev-parse HEAD)"
+if [[ "${actual_sha}" != "${deploy_sha}" ]]; then
+  echo "Production checkout is ${actual_sha}, expected ${deploy_sha}." >&2
+  exit 1
+fi
 
-echo "Starting services..."
-"${compose[@]}" up -d --remove-orphans
+echo "Building images for ${actual_sha}..."
+"${compose[@]}" build --pull
+
+echo "Starting services from rebuilt images..."
+"${compose[@]}" up -d --force-recreate --remove-orphans
 
 wait_for_url() {
   local name="$1"
@@ -55,6 +61,7 @@ wait_for_url() {
 }
 
 if ! wait_for_url "API readiness" "http://127.0.0.1:3001/ready" ||
+  ! wait_for_url "Persisted API routes" "http://127.0.0.1:3001/api/v1/projects" ||
   ! wait_for_url "Frontend" "http://127.0.0.1:3000/"; then
   "${compose[@]}" ps >&2
   "${compose[@]}" logs --tail=100 api web >&2
