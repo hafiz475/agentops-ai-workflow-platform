@@ -68,7 +68,7 @@ export class RunExecutor {
           metadata: { node_id: node.id, node_type: node.type },
         });
         this.logger.info(nodeContext, 'workflow.node_started');
-        value = await this.executeNode(node, value, run.id, nodeRun.id);
+        value = await this.executeNode(node, value, run.id, nodeRun.id, run.projectId);
         await this.store.updateNodeRun(nodeRun.id, {
           status: 'COMPLETED',
           output: value,
@@ -122,6 +122,7 @@ export class RunExecutor {
     input: Record<string, unknown>,
     runId: string,
     nodeRunId: string,
+    projectId: string,
   ): Promise<Record<string, unknown>> {
     switch (node.type) {
       case 'INPUT': {
@@ -132,12 +133,21 @@ export class RunExecutor {
       case 'PROMPT': {
         const value = input.input;
         if (typeof value !== 'string') throw new Error('PROMPT requires string input.');
-        const prompt = renderPrompt(node.config.template, { input: value });
+        const promptVersion =
+          'prompt_version_id' in node.config
+            ? await this.store.getPromptVersionById(projectId, node.config.prompt_version_id)
+            : null;
+        if ('prompt_version_id' in node.config && !promptVersion) {
+          throw new Error('Referenced PromptVersion is unavailable in this project.');
+        }
+        const template = 'template' in node.config ? node.config.template : promptVersion?.template;
+        if (!template) throw new Error('PROMPT requires a template or PromptVersion.');
+        const prompt = renderPrompt(template, { input: value });
         await this.store.addTrace({
           runId,
           nodeRunId,
           eventType: 'PROMPT_RENDERED',
-          metadata: { prompt },
+          metadata: { prompt, prompt_version_id: promptVersion?.id ?? null },
         });
         return { prompt };
       }

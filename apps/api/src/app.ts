@@ -7,6 +7,8 @@ import { HttpAiServiceClient } from './ai-client.js';
 import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { RunExecutor } from './executor.js';
+import { EvaluationExecutor } from './evaluation-executor.js';
+import { registerMilestone2Routes } from './milestone2-routes.js';
 import { registerApiRoutes } from './routes.js';
 import { PostgresStore, type Store } from './store.js';
 
@@ -67,7 +69,12 @@ export const buildApp = async (
     info: (data, message) => app.log.info(data, message),
     error: (data, message) => app.log.error(data, message),
   });
+  const evaluationExecutor = new EvaluationExecutor(dependencies.store, executor, {
+    info: (data, message) => app.log.info(data, message),
+    error: (data, message) => app.log.error(data, message),
+  });
   await registerApiRoutes(app, dependencies.store, executor);
+  await registerMilestone2Routes(app, dependencies.store, evaluationExecutor);
   app.addHook('onClose', async () => dependencies.close());
   return app;
 };

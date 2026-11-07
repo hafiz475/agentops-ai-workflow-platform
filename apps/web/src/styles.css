@@ -408,3 +408,186 @@ section {
     grid-template-columns: 1fr;
   }
 }
+
+select {
+  width: 100%;
+  border: 1px solid #bec8c0;
+  border-radius: 7px;
+  padding: 11px 12px;
+  background: white;
+  font: inherit;
+}
+.workspace-page {
+  padding-bottom: 60px;
+}
+.registry-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(420px, 1fr);
+  gap: 18px;
+  margin-top: 24px;
+}
+.registry-list,
+.registry-editor,
+.panel,
+.comparison-panel {
+  background: #fcfcf7;
+  border: 1px solid #d2d9d3;
+  border-radius: 10px;
+  padding: 20px;
+}
+.registry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.registry-item {
+  width: 100%;
+  background: white;
+  color: #173127;
+  border: 1px solid #d5dbd5;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.registry-item.active {
+  border-color: #2f8256;
+  box-shadow: inset 3px 0 #2f8256;
+}
+.registry-item small {
+  color: #6b7971;
+}
+.registry-editor label,
+.stack label {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.stack {
+  display: grid;
+  gap: 10px;
+}
+.evaluation-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 24px;
+}
+.case-editor {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #d5dbd5;
+}
+.run-list {
+  display: grid;
+  gap: 7px;
+  max-height: 330px;
+  overflow: auto;
+}
+.evaluation-results {
+  margin-top: 18px;
+}
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+.metric-card {
+  background: white;
+  border: 1px solid #d4dcd6;
+  border-radius: 9px;
+  padding: 15px;
+}
+.metric-card span {
+  display: block;
+  color: #67756d;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.metric-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 22px;
+}
+.table-wrap {
+  overflow-x: auto;
+  background: white;
+  border: 1px solid #d5dbd5;
+  border-radius: 10px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+th,
+td {
+  text-align: left;
+  padding: 11px;
+  border-bottom: 1px solid #e1e5e2;
+  vertical-align: top;
+}
+th {
+  background: #173127;
+  color: white;
+}
+td code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pass {
+  color: #08723a;
+  font-weight: 900;
+}
+.fail {
+  color: #a32626;
+  font-weight: 900;
+}
+.comparison-panel {
+  margin-top: 28px;
+}
+.comparison-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+}
+.comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  margin-top: 18px;
+}
+.comparison-grid article {
+  border: 1px solid #d5dbd5;
+  border-radius: 9px;
+  padding: 16px;
+  background: white;
+  min-width: 0;
+}
+.comparison-grid code {
+  overflow-wrap: anywhere;
+}
+.delta-card {
+  background: #eef5ef !important;
+}
+@media (max-width: 1100px) {
+  .metric-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .comparison-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 800px) {
+  .registry-layout,
+  .evaluation-columns,
+  .comparison-controls {
+    grid-template-columns: 1fr;
+  }
+  .metric-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

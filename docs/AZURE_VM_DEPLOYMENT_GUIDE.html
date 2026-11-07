@@ -1352,6 +1352,34 @@ http://127.0.0.1:3000/</code></pre>
         frontend, <code>/health</code>, and <code>/ready</code>.
       </li>
     </ul>
+    <h3>12.9 Milestone 2 deployment verification</h3>
+    <p>
+      Milestone 2 adds the prompt registry, immutable PromptVersions, evaluation datasets and cases,
+      deterministic evaluators, aggregate metrics, and prompt-version comparison. No new public
+      ports or Azure resources are required: the database migration is applied by API startup and
+      the same web, API, AI service, PostgreSQL, and Redis containers are rebuilt by the verified
+      OIDC pipeline.
+    </p>
+    <ol>
+      <li>Push the Milestone 2 commit to <code>main</code>.</li>
+      <li>Confirm the <strong>CI</strong> workflow completes successfully.</li>
+      <li>Confirm <strong>Deploy Azure VM</strong> runs for the exact successful CI commit.</li>
+      <li>Open the Prompts page and create a prompt plus an immutable version.</li>
+      <li>Select that PromptVersion in a workflow, create a WorkflowVersion, and run it.</li>
+      <li>
+        Create an evaluation dataset with multiple cases, launch an evaluation, and wait for a
+        terminal status.
+      </li>
+      <li>
+        Verify per-case trace links, pass rate, latency percentiles, token totals, and comparison
+        deltas.
+      </li>
+    </ol>
+    <div class="note">
+      Evaluation jobs currently execute inside the API process. PostgreSQL persists their states and
+      results, but interrupted queued/running work is not automatically recovered until durable
+      workers are introduced in a later milestone.
+    </div>
     <h2 id="operations">13. Daily operations and maintenance</h2>
     <h3>Check status</h3>
     <pre><code>cd /opt/agentops-ai-workflow-platform
@@ -1455,13 +1483,11 @@ sudo docker compose ps</code></pre>
       </tr>
       <tr>
         <td class="check">Complete</td>
-        <td>
-          Milestone 1 CI and automatic Azure deployment verified for commit <code>2ac3732</code>
-        </td>
+        <td>Milestone 2 uses the same CI-gated automatic Azure deployment pipeline</td>
       </tr>
     </table>
     <p class="footer-note">
-      End of runbook &middot; AgentOps Studio Milestone 1 &middot; Azure deployment, GitHub OIDC
+      End of runbook &middot; AgentOps Studio Milestone 2 &middot; Azure deployment, GitHub OIDC
       CI/CD, and AI workflow execution
     </p>
   </body>

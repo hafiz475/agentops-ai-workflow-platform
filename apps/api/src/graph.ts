@@ -6,6 +6,39 @@ export interface GraphValidationResult {
   executionOrder: string[];
 }
 
+export interface PromptTemplateValidationResult {
+  valid: boolean;
+  variables: string[];
+  errors: string[];
+}
+
+export const validatePromptTemplate = (
+  template: string,
+  allowedVariables: readonly string[] = ['input'],
+): PromptTemplateValidationResult => {
+  const errors: string[] = [];
+  const variables: string[] = [];
+  const placeholderPattern = /{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g;
+  for (const match of template.matchAll(/{{([\s\S]*?)}}/g)) {
+    const expression = match[1]?.trim() ?? '';
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expression)) {
+      errors.push(`Unsafe prompt expression: {{${expression}}}.`);
+    }
+  }
+  for (const match of template.matchAll(placeholderPattern)) {
+    const variable = match[1];
+    if (!variable) continue;
+    variables.push(variable);
+    if (!allowedVariables.includes(variable))
+      errors.push(`Unknown template variable: ${variable}.`);
+  }
+  const stripped = template.replace(placeholderPattern, '');
+  if (stripped.includes('{{') || stripped.includes('}}')) {
+    errors.push('Prompt contains an invalid or unclosed placeholder.');
+  }
+  return { valid: errors.length === 0, variables: [...new Set(variables)].sort(), errors };
+};
+
 const countType = (nodes: WorkflowNode[], type: WorkflowNode['type']): number =>
   nodes.filter((node) => node.type === type).length;
 
@@ -27,6 +60,12 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
   if (countType(graph.nodes, 'OUTPUT') !== 1) errors.push('Exactly one OUTPUT node is required.');
   if (countType(graph.nodes, 'PROMPT') < 1) errors.push('At least one PROMPT node is required.');
   if (countType(graph.nodes, 'LLM') !== 1) errors.push('Exactly one LLM node is required.');
+
+  for (const node of graph.nodes) {
+    if (node.type === 'PROMPT' && 'template' in node.config) {
+      errors.push(...validatePromptTemplate(node.config.template).errors);
+    }
+  }
 
   const edgeKeys = new Set<string>();
   for (const edge of graph.edges) {
@@ -100,7 +139,6 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
   if (errors.length === 0 && (types[0] !== 'INPUT' || types.at(-1) !== 'OUTPUT')) {
     errors.push('Execution order must start with INPUT and end with OUTPUT.');
   }
-
   return {
     valid: errors.length === 0,
     errors: [...new Set(errors)],
@@ -109,13 +147,8 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
 };
 
 export const renderPrompt = (template: string, values: Record<string, string>): string => {
-  const variables = [...template.matchAll(/{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g)].map(
-    (match) => match[1],
-  );
-  for (const variable of variables) {
-    if (!variable || !(variable in values))
-      throw new Error(`Unknown template variable: ${variable ?? ''}`);
-  }
+  const validation = validatePromptTemplate(template, Object.keys(values));
+  if (!validation.valid) throw new Error(validation.errors.join(' '));
   return template.replace(
     /{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g,
     (_match, variable: string) => values[variable] ?? '',

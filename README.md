@@ -1,51 +1,38 @@
-# AgentOps Studio
+﻿# AgentOps Studio
 
-A production-style AI workflow and observability platform. Milestone 1 implements the first real, persisted workflow execution vertical slice while preserving the React → Node control plane → Python execution-plane boundary.
+A production-style AI workflow and observability platform. Milestone 2 adds reusable, immutable prompt versions and deterministic evaluation while preserving the React -> Node control plane -> Python execution-plane boundary.
 
 ## Implemented
 
-- React + TypeScript project and workflow UI
-- ReactFlow INPUT → PROMPT → LLM → OUTPUT visual editor
-- Strict node/edge schemas and controlled `{{input}}` substitution
-- Deterministic graph validation, Kahn cycle detection, connectivity and reachability checks
-- Mutable workflow drafts and immutable numbered workflow versions
-- Project-scoped project/workflow/version/run/trace APIs
-- Asynchronous 202 run creation with an isolated Node `RunExecutor`
-- Persisted runs, node runs, trace events, final output, and safe failures
-- Versioned, runtime-validated Node → Python `/v1/generate` contract
-- Deterministic development provider (`DEV_RESPONSE: <prompt>`)
-- OpenAI provider adapter selected by environment configuration
-- TanStack Query run polling and a result/trace timeline
-- PostgreSQL migrations, Redis, Docker Compose, health/readiness probes
-- Strict TypeScript, ESLint, Prettier, Ruff, mypy, pytest, and GitHub Actions
-- Azure VM deployment with OIDC-based automatic delivery
-
-## Planned
-
-- Prompt registry and reusable PromptVersions
-- Evaluation datasets, evaluation runs, and version comparison
-- Conditions and branching
-- HTTP tools and tool calling
-- Retrieval, embeddings, vector databases, and RAG
-- Human approval
-- Agent loops
-- Cost/token dashboards and advanced observability
-- Durable Redis-backed workers and interrupted-run recovery
-- Authentication and authorization
+- React + TypeScript project, workflow, prompt registry, and evaluation UI
+- ReactFlow `INPUT -> PROMPT -> LLM -> OUTPUT` editor
+- Strict graph schemas, controlled `{{input}}` substitution, and prompt-reference validation
+- Mutable workflow drafts and immutable WorkflowVersions
+- Project-scoped APIs and PostgreSQL persistence
+- Asynchronous workflow execution with NodeRun and TraceEvent records
+- Reusable prompts with immutable, numbered PromptVersions
+- Evaluation datasets and reusable cases
+- Deterministic EXACT_MATCH, CONTAINS, NOT_CONTAINS, REGEX, and JSON_SCHEMA evaluators
+- Evaluation runs that reuse normal WorkflowRuns for every case
+- Persisted case results, pass rate, latency percentiles, token totals, and version comparisons
+- Runtime-validated Node-to-Python generation contract
+- Deterministic development provider and optional OpenAI adapter
+- Docker Compose, readiness probes, CI, and Azure VM OIDC deployment
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Browser[React + ReactFlow] --> API[Fastify control plane]
+  Browser[React and ReactFlow] --> API[Fastify control plane]
   API --> DB[(PostgreSQL)]
   API --> Redis[(Redis)]
-  API -->|POST /v1/generate| AI[FastAPI AI service]
-  AI --> Dev[Development provider]
-  AI --> OpenAI[OpenAI adapter]
+  API --> Eval[EvaluationExecutor]
+  Eval --> Run[Normal RunExecutor]
+  Run -->|POST /v1/generate| AI[FastAPI AI service]
+  AI --> Provider[Development or OpenAI provider]
 ```
 
-The Node control plane owns graph validation, workflow/version/run persistence, orchestration, prompt rendering, and traces. Python owns only provider-specific generation. See [ARCHITECTURE.md](ARCHITECTURE.md) and [ADRs](docs/adr/README.md).
+Node owns prompt/evaluation resources, graph validation, orchestration, metrics, and traces. Python owns provider-specific generation only. See [ARCHITECTURE.md](ARCHITECTURE.md) and [ADRs](docs/adr/README.md).
 
 ## Local development
 
@@ -75,31 +62,26 @@ docker compose up --build
 
 Open `http://localhost:3000`. The API is at `http://localhost:3001`; readiness verifies PostgreSQL, Redis, and Python.
 
-The default provider is deterministic and requires no key:
+The deterministic provider is the default and requires no key. Set `AI_PROVIDER=openai`, `AI_OPENAI_API_KEY`, and `AI_OPENAI_MODEL` to use the OpenAI adapter. Never expose provider keys to the browser or commit them.
 
-```env
-AI_PROVIDER=development
-```
+## Milestone 2 flow
 
-To select the implemented OpenAI adapter:
+1. Create a project and a reusable prompt.
+2. add an immutable PromptVersion containing controlled placeholders such as `{{input}}`.
+3. Select that version in a workflow PROMPT node, validate the graph, and create a WorkflowVersion.
+4. Create an evaluation dataset and add cases with inputs, expected outputs, and deterministic evaluator rules.
+5. Launch an evaluation against a WorkflowVersion and optional PromptVersion override.
+6. Each case creates a normal WorkflowRun, preserving the same node trace and execution behavior as interactive runs.
+7. Inspect pass/fail details, trace links, average and p50/p95 latency, token totals, and prompt-version comparisons.
 
-```env
-AI_PROVIDER=openai
-AI_OPENAI_API_KEY=your-key
-AI_OPENAI_MODEL=gpt-4o-mini
-```
+## API highlights
 
-Never expose provider keys to the browser or commit them. Without an OpenAI key, the service falls back to the development provider.
-
-## Milestone 1 execution
-
-1. Create a project and workflow.
-2. Add and connect INPUT, PROMPT, LLM, and OUTPUT.
-3. Save, validate, and create an immutable version.
-4. Enter runtime input and run it.
-5. The API returns 202/QUEUED, executes in the background, calls Python for the LLM node, and persists node outputs and traces.
-6. The UI polls until COMPLETED/FAILED and renders the result and timeline.
+- `/api/v1/projects/:projectId/prompts`
+- `/api/v1/projects/:projectId/prompts/:promptId/versions`
+- `/api/v1/projects/:projectId/evaluation-datasets`
+- `/api/v1/projects/:projectId/evaluation-runs`
+- `/api/v1/projects/:projectId/evaluation-comparisons`
 
 ## Known limitations
 
-The Milestone 1 executor is asynchronous but in-process, so it is not durable across a control-plane crash. The OpenAI adapter is implemented but was not live-tested without user credentials. The single Azure VM uses HTTP and remains a demo deployment, not a highly available production system.
+Evaluation and workflow executors are asynchronous but in-process, so queued work is not durable across an API crash. JSON Schema evaluation intentionally supports a deterministic subset. The OpenAI adapter is not live-tested without user credentials. The Azure demo is one VM over HTTP, not a highly available production deployment. RAG, tools, branching, human approval, authentication, and durable workers remain out of Milestone 2 scope.

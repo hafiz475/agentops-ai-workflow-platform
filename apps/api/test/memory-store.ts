@@ -3,6 +3,12 @@ import type { WorkflowGraph } from '@agentops/contracts';
 import type {
   NodeRunRecord,
   ProjectRecord,
+  PromptRecord,
+  PromptVersionRecord,
+  EvaluationDatasetRecord,
+  EvaluationCaseRecord,
+  EvaluationRunRecord,
+  EvaluationCaseResultRecord,
   RunRecord,
   Store,
   TraceEventRecord,
@@ -18,6 +24,12 @@ export class MemoryStore implements Store {
   public runs: RunRecord[] = [];
   public nodeRuns: NodeRunRecord[] = [];
   public traces: TraceEventRecord[] = [];
+  public prompts: PromptRecord[] = [];
+  public promptVersions: PromptVersionRecord[] = [];
+  public evaluationDatasets: EvaluationDatasetRecord[] = [];
+  public evaluationCases: EvaluationCaseRecord[] = [];
+  public evaluationRuns: EvaluationRunRecord[] = [];
+  public evaluationCaseResults: EvaluationCaseResultRecord[] = [];
   async createProject(input: { name: string; description: string | null }) {
     const item = { id: randomUUID(), ...input, createdAt: now(), updatedAt: now() };
     this.projects.push(item);
@@ -170,5 +182,189 @@ export class MemoryStore implements Store {
   async listTrace(projectId: string, workflowId: string, runId: string) {
     if (!(await this.getRun(projectId, workflowId, runId))) return null;
     return this.traces.filter((e) => e.runId === runId);
+  }
+  async createPrompt(projectId: string, input: { name: string; description: string | null }) {
+    if (!(await this.getProject(projectId))) return null;
+    const item: PromptRecord = {
+      id: randomUUID(),
+      projectId,
+      ...input,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.prompts.push(item);
+    return item;
+  }
+  async listPrompts(projectId: string) {
+    return this.prompts.filter((item) => item.projectId === projectId);
+  }
+  async getPrompt(projectId: string, promptId: string) {
+    return (
+      this.prompts.find((item) => item.projectId === projectId && item.id === promptId) ?? null
+    );
+  }
+  async createPromptVersion(
+    projectId: string,
+    promptId: string,
+    input: { template: string; variables: string[]; changeNotes: string | null },
+  ) {
+    const prompt = await this.getPrompt(projectId, promptId);
+    if (!prompt) return null;
+    const item: PromptVersionRecord = {
+      id: randomUUID(),
+      promptId,
+      versionNumber:
+        this.promptVersions.filter((version) => version.promptId === promptId).length + 1,
+      ...structuredClone(input),
+      createdAt: now(),
+    };
+    this.promptVersions.push(item);
+    prompt.updatedAt = now();
+    return item;
+  }
+  async listPromptVersions(projectId: string, promptId: string) {
+    if (!(await this.getPrompt(projectId, promptId))) return [];
+    return this.promptVersions
+      .filter((item) => item.promptId === promptId)
+      .sort((a, b) => b.versionNumber - a.versionNumber);
+  }
+  async getPromptVersion(projectId: string, promptId: string, versionId: string) {
+    if (!(await this.getPrompt(projectId, promptId))) return null;
+    return (
+      this.promptVersions.find((item) => item.promptId === promptId && item.id === versionId) ??
+      null
+    );
+  }
+  async getPromptVersionById(projectId: string, versionId: string) {
+    const version = this.promptVersions.find((item) => item.id === versionId);
+    if (!version) return null;
+    return (await this.getPrompt(projectId, version.promptId)) ? version : null;
+  }
+  async createEvaluationDataset(
+    projectId: string,
+    input: { name: string; description: string | null },
+  ) {
+    if (!(await this.getProject(projectId))) return null;
+    const item: EvaluationDatasetRecord = {
+      id: randomUUID(),
+      projectId,
+      ...input,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.evaluationDatasets.push(item);
+    return item;
+  }
+  async listEvaluationDatasets(projectId: string) {
+    return this.evaluationDatasets.filter((item) => item.projectId === projectId);
+  }
+  async getEvaluationDataset(projectId: string, datasetId: string) {
+    return (
+      this.evaluationDatasets.find(
+        (item) => item.projectId === projectId && item.id === datasetId,
+      ) ?? null
+    );
+  }
+  async createEvaluationCase(
+    projectId: string,
+    datasetId: string,
+    input: Omit<EvaluationCaseRecord, 'id' | 'datasetId' | 'createdAt'>,
+  ) {
+    const dataset = await this.getEvaluationDataset(projectId, datasetId);
+    if (!dataset) return null;
+    const item: EvaluationCaseRecord = {
+      id: randomUUID(),
+      datasetId,
+      ...structuredClone(input),
+      createdAt: now(),
+    };
+    this.evaluationCases.push(item);
+    dataset.updatedAt = now();
+    return item;
+  }
+  async listEvaluationCases(projectId: string, datasetId: string) {
+    if (!(await this.getEvaluationDataset(projectId, datasetId))) return [];
+    return this.evaluationCases.filter((item) => item.datasetId === datasetId);
+  }
+  async createEvaluationRun(input: {
+    projectId: string;
+    datasetId: string;
+    workflowId: string;
+    workflowVersionId: string;
+    totalCases: number;
+  }) {
+    const item: EvaluationRunRecord = {
+      id: randomUUID(),
+      ...input,
+      status: 'QUEUED',
+      startedAt: null,
+      completedAt: null,
+      passedCases: 0,
+      failedCases: 0,
+      averageScore: null,
+      averageLatencyMs: null,
+      p50LatencyMs: null,
+      p95LatencyMs: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      errorCode: null,
+      errorMessage: null,
+      createdAt: now(),
+    };
+    this.evaluationRuns.push(item);
+    return item;
+  }
+  async listEvaluationRuns(projectId: string) {
+    return this.evaluationRuns.filter((item) => item.projectId === projectId);
+  }
+  async getEvaluationRun(projectId: string, runId: string) {
+    return (
+      this.evaluationRuns.find((item) => item.projectId === projectId && item.id === runId) ?? null
+    );
+  }
+  async updateEvaluationRun(
+    runId: string,
+    patch: Partial<
+      Omit<
+        EvaluationRunRecord,
+        'id' | 'projectId' | 'datasetId' | 'workflowId' | 'workflowVersionId' | 'createdAt'
+      >
+    >,
+  ) {
+    const item = this.evaluationRuns.find((candidate) => candidate.id === runId);
+    if (item) Object.assign(item, patch);
+  }
+  async createEvaluationCaseResult(input: { evaluationRunId: string; evaluationCaseId: string }) {
+    const item: EvaluationCaseResultRecord = {
+      id: randomUUID(),
+      ...input,
+      workflowRunId: null,
+      status: 'RUNNING',
+      actualOutput: null,
+      score: null,
+      passed: null,
+      latencyMs: null,
+      inputTokens: null,
+      outputTokens: null,
+      errorCode: null,
+      errorMessage: null,
+      createdAt: now(),
+    };
+    this.evaluationCaseResults.push(item);
+    return item;
+  }
+  async updateEvaluationCaseResult(
+    id: string,
+    patch: Partial<
+      Omit<EvaluationCaseResultRecord, 'id' | 'evaluationRunId' | 'evaluationCaseId' | 'createdAt'>
+    >,
+  ) {
+    const item = this.evaluationCaseResults.find((candidate) => candidate.id === id);
+    if (item) Object.assign(item, patch);
+  }
+  async listEvaluationCaseResults(projectId: string, evaluationRunId: string) {
+    if (!(await this.getEvaluationRun(projectId, evaluationRunId))) return null;
+    return this.evaluationCaseResults.filter((item) => item.evaluationRunId === evaluationRunId);
   }
 }

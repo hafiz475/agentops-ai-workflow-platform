@@ -106,6 +106,14 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
   const graph = useMemo(() => graphFromCanvas(nodes, edges), [nodes, edges]);
   const selected = nodes.find((node) => node.id === selectedId) ?? null;
 
+  const prompts = useQuery({
+    queryKey: ['prompts', projectId],
+    queryFn: () => api.listPrompts(projectId),
+  });
+  const promptVersions =
+    prompts.data?.flatMap((prompt) =>
+      prompt.versions.map((version) => ({ ...version, promptName: prompt.name })),
+    ) ?? [];
   const versions = useQuery({
     queryKey: ['versions', projectId, workflow.id],
     queryFn: () => api.listVersions(projectId, workflow.id),
@@ -169,6 +177,11 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
 
   const addNode = (nodeType: NodeType) => {
     const node = createWorkflowNode(nodeType, nodes.length);
+    const preferredPromptVersion = promptVersions[0];
+    if (nodeType === 'PROMPT' && preferredPromptVersion) {
+      node.data.config = { prompt_version_id: preferredPromptVersion.id };
+      node.data.label = `${preferredPromptVersion.promptName} v${preferredPromptVersion.versionNumber}`;
+    }
     setNodes((current) => [...current, node]);
     setSelectedId(node.id);
   };
@@ -187,6 +200,16 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
                 },
               },
             }
+          : node,
+      ),
+    );
+  };
+  const replaceSelectedConfig = (config: Record<string, unknown>, label?: string) => {
+    if (!selectedId) return;
+    setNodes((current) =>
+      current.map((node) =>
+        node.id === selectedId
+          ? { ...node, data: { ...node.data, config, label: label ?? node.data.label } }
           : node,
       ),
     );
@@ -246,13 +269,51 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
           <h2>Configuration</h2>
           {!selected && <p>Select a node.</p>}
           {selected?.data.nodeType === 'PROMPT' && (
-            <label>
-              Template
-              <textarea
-                value={String((selected.data.config as Record<string, unknown>).template ?? '')}
-                onChange={(event) => updateConfig('template', event.target.value)}
-              />
-            </label>
+            <>
+              <label>
+                Prompt version (preferred)
+                <select
+                  aria-label="Prompt version"
+                  value={String(
+                    (selected.data.config as Record<string, unknown>).prompt_version_id ?? '',
+                  )}
+                  onChange={(event) => {
+                    const version = promptVersions.find((item) => item.id === event.target.value);
+                    if (version)
+                      replaceSelectedConfig(
+                        { prompt_version_id: version.id },
+                        `${version.promptName} v${version.versionNumber}`,
+                      );
+                    else
+                      replaceSelectedConfig(
+                        { template: 'Answer this clearly: {{input}}' },
+                        nodeLabels.PROMPT,
+                      );
+                  }}
+                >
+                  <option value="">Inline legacy prompt</option>
+                  {promptVersions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.promptName} ? v{version.versionNumber}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {'template' in (selected.data.config as Record<string, unknown>) && (
+                <label>
+                  Inline template (Milestone 1 compatibility)
+                  <textarea
+                    value={String((selected.data.config as Record<string, unknown>).template ?? '')}
+                    onChange={(event) => updateConfig('template', event.target.value)}
+                  />
+                </label>
+              )}
+              {'prompt_version_id' in (selected.data.config as Record<string, unknown>) && (
+                <p className="validation-message">
+                  This workflow will pin the selected immutable PromptVersion.
+                </p>
+              )}
+            </>
           )}
           {selected?.data.nodeType === 'LLM' && (
             <>

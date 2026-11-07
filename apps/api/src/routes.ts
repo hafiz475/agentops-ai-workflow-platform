@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { RunExecutor } from './executor.js';
 import { validateWorkflowGraph } from './graph.js';
 import type { Store } from './store.js';
+import { validatePromptVersionReferences } from './milestone2-routes.js';
 
 const idParams = z.object({ projectId: z.string().uuid() });
 const workflowParams = idParams.extend({ workflowId: z.string().uuid() });
@@ -97,7 +98,17 @@ export const registerApiRoutes = async (
       return reply.code(404).send({ error: 'WORKFLOW_NOT_FOUND' });
     if (!graph.success) return reply.code(422).send(validationError(graph.error));
     const result = validateWorkflowGraph(graph.data);
-    return reply.code(result.valid ? 200 : 422).send(result);
+    const promptErrors = await validatePromptVersionReferences(
+      store,
+      params.data.projectId,
+      graph.data,
+    );
+    const response = {
+      ...result,
+      valid: result.valid && promptErrors.length === 0,
+      errors: [...result.errors, ...promptErrors],
+    };
+    return reply.code(response.valid ? 200 : 422).send(response);
   });
 
   app.post('/api/v1/projects/:projectId/workflows/:workflowId/versions', async (request, reply) => {
@@ -112,8 +123,15 @@ export const registerApiRoutes = async (
     const graph = workflowGraphSchema.safeParse(candidate);
     if (!graph.success) return reply.code(422).send(validationError(graph.error));
     const result = validateWorkflowGraph(graph.data);
-    if (!result.valid)
-      return reply.code(422).send({ error: 'INVALID_WORKFLOW_GRAPH', details: result.errors });
+    const promptErrors = await validatePromptVersionReferences(
+      store,
+      params.data.projectId,
+      graph.data,
+    );
+    if (!result.valid || promptErrors.length)
+      return reply
+        .code(422)
+        .send({ error: 'INVALID_WORKFLOW_GRAPH', details: [...result.errors, ...promptErrors] });
     const version = await store.createVersion(
       params.data.projectId,
       params.data.workflowId,

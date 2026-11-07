@@ -5,7 +5,6 @@ export const serviceStatusSchema = z.object({
   service: z.string().min(1),
   version: z.string().min(1),
 });
-
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 
 const positionSchema = z.object({ x: z.number().finite(), y: z.number().finite() });
@@ -14,14 +13,17 @@ const nodeBaseSchema = z.object({
   version: z.literal(1),
   position: positionSchema,
 });
-
 export const inputNodeSchema = nodeBaseSchema.extend({
   type: z.literal('INPUT'),
   config: z.object({}).strict(),
 });
+export const inlinePromptConfigSchema = z.object({ template: z.string().min(1) }).strict();
+export const versionedPromptConfigSchema = z
+  .object({ prompt_version_id: z.string().uuid() })
+  .strict();
 export const promptNodeSchema = nodeBaseSchema.extend({
   type: z.literal('PROMPT'),
-  config: z.object({ template: z.string().min(1) }).strict(),
+  config: z.union([inlinePromptConfigSchema, versionedPromptConfigSchema]),
 });
 export const llmNodeSchema = nodeBaseSchema.extend({
   type: z.literal('LLM'),
@@ -37,7 +39,6 @@ export const outputNodeSchema = nodeBaseSchema.extend({
   type: z.literal('OUTPUT'),
   config: z.object({}).strict(),
 });
-
 export const workflowNodeSchema = z.discriminatedUnion('type', [
   inputNodeSchema,
   promptNodeSchema,
@@ -53,10 +54,27 @@ export const workflowGraphSchema = z.object({
   nodes: z.array(workflowNodeSchema),
   edges: z.array(workflowEdgeSchema),
 });
-
 export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
 export type WorkflowEdge = z.infer<typeof workflowEdgeSchema>;
 export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;
+
+export const evaluatorConfigSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('EXACT_MATCH') }).strict(),
+  z.object({ type: z.literal('CONTAINS'), values: z.array(z.string().min(1)).min(1) }).strict(),
+  z.object({ type: z.literal('NOT_CONTAINS'), values: z.array(z.string().min(1)).min(1) }).strict(),
+  z
+    .object({
+      type: z.literal('REGEX'),
+      pattern: z.string().min(1),
+      flags: z
+        .string()
+        .regex(/^[im]*$/)
+        .default(''),
+    })
+    .strict(),
+  z.object({ type: z.literal('JSON_SCHEMA'), schema: z.record(z.string(), z.unknown()) }).strict(),
+]);
+export type EvaluatorConfig = z.infer<typeof evaluatorConfigSchema>;
 
 export const generateRequestSchema = z.object({
   run_id: z.string().uuid(),
@@ -73,11 +91,14 @@ export const generateResponseSchema = z.object({
   input_tokens: z.number().int().nonnegative().nullable(),
   output_tokens: z.number().int().nonnegative().nullable(),
 });
-
 export type GenerateRequest = z.infer<typeof generateRequestSchema>;
 export type GenerateResponse = z.infer<typeof generateResponseSchema>;
 
 export const runStatusSchema = z.enum(['QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED']);
 export const nodeRunStatusSchema = z.enum(['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'SKIPPED']);
+export const evaluationRunStatusSchema = runStatusSchema;
+export const evaluationCaseStatusSchema = z.enum(['RUNNING', 'COMPLETED', 'FAILED']);
 export type RunStatus = z.infer<typeof runStatusSchema>;
 export type NodeRunStatus = z.infer<typeof nodeRunStatusSchema>;
+export type EvaluationRunStatus = z.infer<typeof evaluationRunStatusSchema>;
+export type EvaluationCaseStatus = z.infer<typeof evaluationCaseStatusSchema>;

@@ -34,6 +34,46 @@ export interface WorkflowVersion {
   graph: WorkflowGraph;
   createdAt: string;
 }
+export interface PromptVersion {
+  id: string;
+  promptId: string;
+  versionNumber: number;
+  template: string;
+  variables: string[];
+  changeNotes: string | null;
+  createdAt: string;
+}
+export interface Prompt {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  updatedAt: string;
+  versions: PromptVersion[];
+}
+export type EvaluatorConfig =
+  | { type: 'EXACT_MATCH' }
+  | { type: 'CONTAINS'; values: string[] }
+  | { type: 'NOT_CONTAINS'; values: string[] }
+  | { type: 'REGEX'; pattern: string; flags: string }
+  | { type: 'JSON_SCHEMA'; schema: Record<string, unknown> };
+export interface EvaluationCase {
+  id: string;
+  datasetId: string;
+  input: Record<string, unknown>;
+  expectedOutput: Record<string, unknown>;
+  evaluatorConfig: EvaluatorConfig;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+export interface EvaluationDataset {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  updatedAt: string;
+  cases: EvaluationCase[];
+}
 export interface NodeRun {
   id: string;
   nodeId: string;
@@ -62,12 +102,70 @@ export interface TraceEvent {
   metadata: Record<string, unknown>;
   createdAt: string;
 }
+export interface EvaluationCaseResult {
+  id: string;
+  evaluationCaseId: string;
+  workflowRunId: string | null;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  actualOutput: Record<string, unknown> | null;
+  score: number | null;
+  passed: boolean | null;
+  latencyMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  errorMessage: string | null;
+  evaluationCase: EvaluationCase | null;
+}
+export interface EvaluationRun {
+  id: string;
+  projectId: string;
+  datasetId: string;
+  workflowId: string;
+  workflowVersionId: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  totalCases: number;
+  passedCases: number;
+  failedCases: number;
+  passPercentage?: number;
+  averageScore: number | null;
+  averageLatencyMs: number | null;
+  p50LatencyMs: number | null;
+  p95LatencyMs: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  errorMessage: string | null;
+  results?: EvaluationCaseResult[];
+  createdAt: string;
+}
+export interface EvaluationComparisonSummary {
+  evaluationRunId: string;
+  workflowId: string;
+  workflowVersionId: string;
+  promptVersionIds: string[];
+  passPercentage: number;
+  averageScore: number;
+  averageLatencyMs: number;
+  totalTokens: number;
+}
+export interface EvaluationComparison {
+  datasetId: string;
+  runA: EvaluationComparisonSummary;
+  runB: EvaluationComparisonSummary;
+  deltas: {
+    qualityScore: number;
+    passPercentagePoints: number;
+    latencyMs: number;
+    totalTokens: number;
+  };
+  interpretation: string;
+}
 
-const baseUrl =
+const apiOrigin =
   typeof window === 'undefined'
-    ? 'http://localhost:3001/api/v1'
-    : `${window.location.protocol}//${window.location.hostname}:3001/api/v1`;
-
+    ? 'http://localhost:3001'
+    : `${window.location.protocol}//${window.location.hostname}:3001`;
+const baseUrl = `${apiOrigin}/api/v1`;
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
@@ -82,7 +180,8 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   }
   return data as T;
 };
-
+export const workflowTraceUrl = (projectId: string, workflowId: string, runId: string) =>
+  `${baseUrl}/projects/${projectId}/workflows/${workflowId}/runs/${runId}/trace`;
 export const api = {
   listProjects: () => request<Project[]>('/projects'),
   createProject: (name: string) =>
@@ -119,4 +218,57 @@ export const api = {
     request<Run>(`/projects/${projectId}/workflows/${workflowId}/runs/${runId}`),
   getTrace: (projectId: string, workflowId: string, runId: string) =>
     request<TraceEvent[]>(`/projects/${projectId}/workflows/${workflowId}/runs/${runId}/trace`),
+  listPrompts: (projectId: string) => request<Prompt[]>(`/projects/${projectId}/prompts`),
+  createPrompt: (projectId: string, name: string, description: string | null = null) =>
+    request<Prompt>(`/projects/${projectId}/prompts`, {
+      method: 'POST',
+      body: JSON.stringify({ name, description }),
+    }),
+  createPromptVersion: (
+    projectId: string,
+    promptId: string,
+    template: string,
+    changeNotes: string | null,
+  ) =>
+    request<PromptVersion>(`/projects/${projectId}/prompts/${promptId}/versions`, {
+      method: 'POST',
+      body: JSON.stringify({ template, changeNotes }),
+    }),
+  listDatasets: (projectId: string) =>
+    request<EvaluationDataset[]>(`/projects/${projectId}/evaluation-datasets`),
+  createDataset: (projectId: string, name: string) =>
+    request<EvaluationDataset>(`/projects/${projectId}/evaluation-datasets`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  addEvaluationCase: (
+    projectId: string,
+    datasetId: string,
+    input: Record<string, unknown>,
+    expectedOutput: Record<string, unknown>,
+    evaluatorConfig: EvaluatorConfig,
+  ) =>
+    request<EvaluationCase>(`/projects/${projectId}/evaluation-datasets/${datasetId}/cases`, {
+      method: 'POST',
+      body: JSON.stringify({ input, expectedOutput, evaluatorConfig }),
+    }),
+  listEvaluationRuns: (projectId: string) =>
+    request<EvaluationRun[]>(`/projects/${projectId}/evaluation-runs`),
+  createEvaluationRun: (
+    projectId: string,
+    datasetId: string,
+    workflowId: string,
+    workflowVersionId: string,
+  ) =>
+    request<EvaluationRun>(`/projects/${projectId}/evaluation-runs`, {
+      method: 'POST',
+      body: JSON.stringify({ datasetId, workflowId, workflowVersionId }),
+    }),
+  getEvaluationRun: (projectId: string, runId: string) =>
+    request<EvaluationRun>(`/projects/${projectId}/evaluation-runs/${runId}`),
+  compareEvaluationRuns: (projectId: string, evaluationRunIdA: string, evaluationRunIdB: string) =>
+    request<EvaluationComparison>(`/projects/${projectId}/evaluation-comparisons`, {
+      method: 'POST',
+      body: JSON.stringify({ evaluationRunIdA, evaluationRunIdB }),
+    }),
 };

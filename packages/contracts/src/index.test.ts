@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { generateResponseSchema, serviceStatusSchema, workflowGraphSchema } from './index.js';
+import {
+  evaluatorConfigSchema,
+  generateResponseSchema,
+  serviceStatusSchema,
+  workflowGraphSchema,
+} from './index.js';
 
 describe('contracts', () => {
   it('rejects an invalid service response', () => {
@@ -36,6 +41,23 @@ describe('contracts', () => {
     assert.equal(graph.nodes.length, 4);
   });
 
+  it('validates versioned prompts and deterministic evaluator contracts', () => {
+    const graph = workflowGraphSchema.parse({
+      nodes: [
+        {
+          id: 'prompt',
+          type: 'PROMPT',
+          version: 1,
+          position: { x: 0, y: 0 },
+          config: { prompt_version_id: '00000000-0000-4000-8000-000000000001' },
+        },
+      ],
+      edges: [],
+    });
+    assert.equal(graph.nodes[0]?.type, 'PROMPT');
+    assert.equal(evaluatorConfigSchema.parse({ type: 'REGEX', pattern: '^ok$' }).type, 'REGEX');
+    assert.throws(() => evaluatorConfigSchema.parse({ type: 'REGEX' }));
+  });
   it('rejects unchecked node configuration and invalid AI responses', () => {
     assert.throws(() =>
       workflowGraphSchema.parse({
