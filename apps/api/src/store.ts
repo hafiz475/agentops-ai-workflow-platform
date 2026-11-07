@@ -689,7 +689,7 @@ export class PostgresStore implements Store {
       }
       const result = await client.query(
         'INSERT INTO prompt_versions(prompt_id,version_number,template,variables,change_notes) SELECT $1,COALESCE(MAX(version_number),0)+1,$2,$3,$4 FROM prompt_versions WHERE prompt_id=$1 RETURNING *',
-        [promptId, input.template, input.variables, input.changeNotes],
+        [promptId, input.template, JSON.stringify(input.variables), input.changeNotes],
       );
       await client.query('UPDATE prompts SET updated_at=now() WHERE id=$1', [promptId]);
       await client.query('COMMIT');
