@@ -39,10 +39,21 @@ export const outputNodeSchema = nodeBaseSchema.extend({
   type: z.literal('OUTPUT'),
   config: z.object({}).strict(),
 });
+export const humanApprovalNodeSchema = nodeBaseSchema.extend({
+  type: z.literal('HUMAN_APPROVAL'),
+  config: z
+    .object({
+      title: z.string().min(1),
+      instructions: z.string().min(1),
+      allow_reject: z.boolean().default(true),
+    })
+    .strict(),
+});
 export const workflowNodeSchema = z.discriminatedUnion('type', [
   inputNodeSchema,
   promptNodeSchema,
   llmNodeSchema,
+  humanApprovalNodeSchema,
   outputNodeSchema,
 ]);
 export const workflowEdgeSchema = z.object({
@@ -94,11 +105,28 @@ export const generateResponseSchema = z.object({
 export type GenerateRequest = z.infer<typeof generateRequestSchema>;
 export type GenerateResponse = z.infer<typeof generateResponseSchema>;
 
-export const runStatusSchema = z.enum(['QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED']);
-export const nodeRunStatusSchema = z.enum(['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'SKIPPED']);
+export const runStatusSchema = z.enum([
+  'QUEUED',
+  'RUNNING',
+  'WAITING_FOR_APPROVAL',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+]);
+export const nodeRunStatusSchema = z.enum([
+  'PENDING',
+  'RUNNING',
+  'WAITING',
+  'COMPLETED',
+  'FAILED',
+  'SKIPPED',
+  'CANCELLED',
+]);
+export const approvalStatusSchema = z.enum(['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED']);
 export const evaluationRunStatusSchema = runStatusSchema;
 export const evaluationCaseStatusSchema = z.enum(['RUNNING', 'COMPLETED', 'FAILED']);
 export type RunStatus = z.infer<typeof runStatusSchema>;
 export type NodeRunStatus = z.infer<typeof nodeRunStatusSchema>;
+export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
 export type EvaluationRunStatus = z.infer<typeof evaluationRunStatusSchema>;
 export type EvaluationCaseStatus = z.infer<typeof evaluationCaseStatusSchema>;

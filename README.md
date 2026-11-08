@@ -1,38 +1,40 @@
-﻿# AgentOps Studio
+# AgentOps Studio
 
-A production-style AI workflow and observability platform. Milestone 2 adds reusable, immutable prompt versions and deterministic evaluation while preserving the React -> Node control plane -> Python execution-plane boundary.
+A production-style AI workflow and observability platform. Milestone 3 adds Redis-backed durable execution, a dedicated worker, bounded retries, cancellation, recovery, and persisted human approval.
 
 ## Implemented
 
-- React + TypeScript project, workflow, prompt registry, and evaluation UI
-- ReactFlow `INPUT -> PROMPT -> LLM -> OUTPUT` editor
-- Strict graph schemas, controlled `{{input}}` substitution, and prompt-reference validation
-- Mutable workflow drafts and immutable WorkflowVersions
-- Project-scoped APIs and PostgreSQL persistence
-- Asynchronous workflow execution with NodeRun and TraceEvent records
-- Reusable prompts with immutable, numbered PromptVersions
-- Evaluation datasets and reusable cases
-- Deterministic EXACT_MATCH, CONTAINS, NOT_CONTAINS, REGEX, and JSON_SCHEMA evaluators
-- Evaluation runs that reuse normal WorkflowRuns for every case
-- Persisted case results, pass rate, latency percentiles, token totals, and version comparisons
-- Runtime-validated Node-to-Python generation contract
-- Deterministic development provider and optional OpenAI adapter
-- Docker Compose, readiness probes, CI, and Azure VM OIDC deployment
+- React + TypeScript project, workflow, prompt, evaluation, run, and approval UI
+- ReactFlow `INPUT -> PROMPT -> LLM -> HUMAN_APPROVAL -> OUTPUT` linear workflows
+- Mutable drafts with immutable WorkflowVersions and PromptVersions
+- Project-scoped Fastify APIs and PostgreSQL persistence
+- BullMQ queues persisted in Redis; the API never performs production execution
+- Dedicated Node worker with four run consumers and two evaluation orchestrators
+- Idempotent `run_id + node_id` NodeRuns, resumable completed-node checkpoints, and worker restart recovery
+- Three attempts with bounded exponential backoff for transient AI/network failures
+- 30-second provider timeout, 120-second workflow/evaluation timeout, and BullMQ stalled-job recovery
+- Queued, running, and approval-wait cancellation with persisted reasons
+- Persisted ApprovalRequests with approve/reject and non-blocking pause/resume
+- Evaluation cases using the same durable WorkflowRuns as interactive execution
+- Structured traces, latency/token metrics, deterministic evaluators, and version comparisons
+- Deterministic development AI provider and optional OpenAI adapter
+- Docker Compose, CI, and Azure VM OIDC deployment
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Browser[React and ReactFlow] --> API[Fastify control plane]
+  Browser[React + ReactFlow] --> API[Fastify API]
   API --> DB[(PostgreSQL)]
-  API --> Redis[(Redis)]
-  API --> Eval[EvaluationExecutor]
-  Eval --> Run[Normal RunExecutor]
-  Run -->|POST /v1/generate| AI[FastAPI AI service]
-  AI --> Provider[Development or OpenAI provider]
+  API --> Queue[(Redis + BullMQ)]
+  Queue --> Worker[Node worker]
+  Worker --> DB
+  Worker -->|LLM nodes only| AI[FastAPI AI service]
+  Worker --> Queue
+  AI --> Provider[Development or OpenAI]
 ```
 
-Node owns prompt/evaluation resources, graph validation, orchestration, metrics, and traces. Python owns provider-specific generation only. See [ARCHITECTURE.md](ARCHITECTURE.md) and [ADRs](docs/adr/README.md).
+The API validates, persists, enqueues, and returns. The worker loads authoritative state from PostgreSQL and owns workflow/evaluation orchestration. Python owns provider generation only. See [ARCHITECTURE.md](ARCHITECTURE.md), [ADRs](docs/adr/README.md), and the [Azure runbook](docs/AZURE_VM_DEPLOYMENT_GUIDE.md).
 
 ## Local development
 
@@ -45,43 +47,30 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
-
-cd apps/ai-service
-python -m pip install -e ".[dev]"
-ruff check .
-ruff format --check .
-mypy app tests
-pytest
-```
-
-Run the complete stack:
-
-```bash
 docker compose up --build
 ```
 
-Open `http://localhost:3000`. The API is at `http://localhost:3001`; readiness verifies PostgreSQL, Redis, and Python.
+Open `http://localhost:3000`; API health/readiness are on port `3001`. The AI service, worker, PostgreSQL, and Redis are private Compose services.
 
-The deterministic provider is the default and requires no key. Set `AI_PROVIDER=openai`, `AI_OPENAI_API_KEY`, and `AI_OPENAI_MODEL` to use the OpenAI adapter. Never expose provider keys to the browser or commit them.
+## Milestone 3 flow
 
-## Milestone 2 flow
-
-1. Create a project and a reusable prompt.
-2. add an immutable PromptVersion containing controlled placeholders such as `{{input}}`.
-3. Select that version in a workflow PROMPT node, validate the graph, and create a WorkflowVersion.
-4. Create an evaluation dataset and add cases with inputs, expected outputs, and deterministic evaluator rules.
-5. Launch an evaluation against a WorkflowVersion and optional PromptVersion override.
-6. Each case creates a normal WorkflowRun, preserving the same node trace and execution behavior as interactive runs.
-7. Inspect pass/fail details, trace links, average and p50/p95 latency, token totals, and prompt-version comparisons.
+1. Create and version a linear workflow, optionally containing `HUMAN_APPROVAL`.
+2. `POST /runs` persists `QUEUED`, writes `RUN_QUEUED`, adds a BullMQ job, and returns HTTP 202.
+3. The worker claims the job, records the attempt, and executes from persisted NodeRuns.
+4. At `HUMAN_APPROVAL`, it persists an ApprovalRequest, marks the node `WAITING` and run `WAITING_FOR_APPROVAL`, then finishes the job.
+5. Approve creates a new resume job. Completed nodes, including the LLM call, are skipped. Reject cancels with `HUMAN_REJECTED`.
+6. Cancellation is idempotent. Running work observes cancellation between nodes.
+7. Evaluation orchestration is itself queued and each case creates a normal queued WorkflowRun.
 
 ## API highlights
 
-- `/api/v1/projects/:projectId/prompts`
-- `/api/v1/projects/:projectId/prompts/:promptId/versions`
-- `/api/v1/projects/:projectId/evaluation-datasets`
+- `POST /api/v1/projects/:projectId/workflows/:workflowId/runs`
+- `POST /api/v1/projects/:projectId/workflows/:workflowId/runs/:runId/cancel`
+- `GET /api/v1/projects/:projectId/approvals`
+- `POST /api/v1/projects/:projectId/approvals/:approvalId/approve`
+- `POST /api/v1/projects/:projectId/approvals/:approvalId/reject`
 - `/api/v1/projects/:projectId/evaluation-runs`
-- `/api/v1/projects/:projectId/evaluation-comparisons`
 
 ## Known limitations
 
-Evaluation and workflow executors are asynchronous but in-process, so queued work is not durable across an API crash. JSON Schema evaluation intentionally supports a deterministic subset. The OpenAI adapter is not live-tested without user credentials. The Azure demo is one VM over HTTP, not a highly available production deployment. RAG, tools, branching, human approval, authentication, and durable workers remain out of Milestone 2 scope.
+The demo has no production authentication, so approval decisions deliberately use the label `demo-reviewer`, not a fabricated identity. A worker crash after a provider accepted a request but before its response was checkpointed can repeat that provider call; completed NodeRuns are never repeated. Cancellation is cooperative between nodes and cannot interrupt an already-running provider request. The Azure demo is one HTTP VM, not highly available. Conditions, transforms, HTTP tools, branching, retrieval/RAG, controlled agents, and production auth/hardening remain planned.

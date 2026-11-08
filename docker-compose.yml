@@ -35,6 +35,30 @@ services:
       timeout: 3s
       retries: 5
 
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ['node', 'apps/api/dist/src/worker.js']
+    environment:
+      AI_SERVICE_URL: http://ai-service:8000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agentops}:${POSTGRES_PASSWORD:-agentops}@postgres:5432/${POSTGRES_DB:-agentops}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      api:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'node', '-e', 'process.kill(1, 0)']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   ai-service:
     build:
       context: .
@@ -43,8 +67,8 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-development}
       AI_OPENAI_API_KEY: ${AI_OPENAI_API_KEY:-}
       AI_OPENAI_MODEL: ${AI_OPENAI_MODEL:-gpt-4o-mini}
-    ports:
-      - '${AI_SERVICE_PORT:-8000}:8000'
+    expose:
+      - '8000'
     healthcheck:
       test:
         [

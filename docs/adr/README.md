@@ -15,3 +15,10 @@
 - [ADR 013: Evaluation cases reuse normal workflow runs](013-evaluations-reuse-workflow-runs.md)
 - [ADR 014: Persist aggregate evaluation metrics](014-evaluation-metrics-aggregation.md)
 - [ADR 015: Compare compatible completed evaluation runs](015-compatible-evaluation-comparison.md)
+
+- [016 — BullMQ durable execution queue](016-bullmq-durable-queue.md)
+- [017 — Dedicated execution worker](017-dedicated-worker.md)
+- [018 — Bounded retry classification](018-retry-classification.md)
+- [019 — Idempotent node checkpoints](019-idempotent-node-execution.md)
+- [020 — Cooperative cancellation](020-cancellation-semantics.md)
+- [021 — Persisted human approval](021-human-approval.md)

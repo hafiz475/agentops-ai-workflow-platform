@@ -1,4 +1,4 @@
-export type NodeType = 'INPUT' | 'PROMPT' | 'LLM' | 'OUTPUT';
+export type NodeType = 'INPUT' | 'PROMPT' | 'LLM' | 'HUMAN_APPROVAL' | 'OUTPUT';
 export interface GraphNode {
   id: string;
   type: NodeType;
@@ -88,12 +88,29 @@ export interface NodeRun {
 export interface Run {
   id: string;
   workflowVersionId: string;
-  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  status: 'QUEUED' | 'RUNNING' | 'WAITING_FOR_APPROVAL' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  attemptCount: number;
+  maxAttempts: number;
   input: Record<string, unknown>;
   output: Record<string, unknown> | null;
   errorMessage: string | null;
   startedAt: string | null;
   completedAt: string | null;
+  nodeRuns?: NodeRun[];
+}
+export interface Approval {
+  id: string;
+  projectId: string;
+  runId: string;
+  nodeRunId: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+  title: string;
+  instructions: string;
+  requestedAt: string;
+  decidedAt: string | null;
+  reviewerLabel: string | null;
+  reason: string | null;
+  run?: Run | null;
   nodeRuns?: NodeRun[];
 }
 export interface TraceEvent {
@@ -218,6 +235,29 @@ export const api = {
     request<Run>(`/projects/${projectId}/workflows/${workflowId}/runs/${runId}`),
   getTrace: (projectId: string, workflowId: string, runId: string) =>
     request<TraceEvent[]>(`/projects/${projectId}/workflows/${workflowId}/runs/${runId}/trace`),
+  cancelRun: (
+    projectId: string,
+    workflowId: string,
+    runId: string,
+    reason = 'Cancelled by user.',
+  ) =>
+    request<Run>(`/projects/${projectId}/workflows/${workflowId}/runs/${runId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  listApprovals: (projectId: string) => request<Approval[]>(`/projects/${projectId}/approvals`),
+  getApproval: (projectId: string, approvalId: string) =>
+    request<Approval>(`/projects/${projectId}/approvals/${approvalId}`),
+  approve: (projectId: string, approvalId: string, reason?: string) =>
+    request<Approval>(`/projects/${projectId}/approvals/${approvalId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  reject: (projectId: string, approvalId: string, reason?: string) =>
+    request<Approval>(`/projects/${projectId}/approvals/${approvalId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
   listPrompts: (projectId: string) => request<Prompt[]>(`/projects/${projectId}/prompts`),
   createPrompt: (projectId: string, name: string, description: string | null = null) =>
     request<Prompt>(`/projects/${projectId}/prompts`, {

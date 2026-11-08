@@ -8,10 +8,11 @@ import {
 import { useState } from 'react';
 import { api, type Project, type Workflow } from './api';
 import { EvaluationsPage } from './EvaluationsPage';
+import { ApprovalsPage } from './ApprovalsPage';
 import { PromptsPage } from './PromptsPage';
 import { WorkflowEditor } from './WorkflowEditor';
 const queryClient = new QueryClient();
-type Page = 'projects' | 'workflows' | 'prompts' | 'evaluations';
+type Page = 'projects' | 'workflows' | 'prompts' | 'evaluations' | 'approvals';
 function Studio() {
   const client = useQueryClient();
   const [project, setProject] = useState<Project | null>(null);
@@ -82,11 +83,18 @@ function Studio() {
             onClick={() => setPage('evaluations')}
           >
             Evaluations
+          </button>{' '}
+          <button
+            disabled={!project}
+            className={page === 'approvals' ? 'active' : ''}
+            onClick={() => setPage('approvals')}
+          >
+            Approvals
           </button>
         </nav>
         <p>
-          Milestone 2<br />
-          <strong>Evaluation online</strong>
+          Milestone 3<br />
+          <strong>Durable worker online</strong>
           {project && (
             <>
               <br />
@@ -179,6 +187,7 @@ function Studio() {
         )}
         {project && page === 'prompts' && <PromptsPage projectId={project.id} />}{' '}
         {project && page === 'evaluations' && <EvaluationsPage projectId={project.id} />}{' '}
+        {project && page === 'approvals' && <ApprovalsPage projectId={project.id} />}{' '}
       </main>
     </div>
   );

@@ -5,7 +5,8 @@ import type {
   Store,
 } from './store.js';
 import { evaluateOutput } from './evaluators.js';
-import type { RunExecutor, RunLogger } from './executor.js';
+import type { RunLogger } from './executor.js';
+import type { DurableQueue } from './queue.js';
 
 const percentile = (values: number[], fraction: number): number => {
   if (values.length === 0) return 0;
@@ -16,17 +17,9 @@ const percentile = (values: number[], fraction: number): number => {
 export class EvaluationExecutor {
   public constructor(
     private readonly store: Store,
-    private readonly runExecutor: RunExecutor,
+    private readonly queue: DurableQueue,
     private readonly logger: RunLogger,
   ) {}
-
-  public enqueue(
-    evaluationRun: EvaluationRunRecord,
-    cases: EvaluationCaseRecord[],
-    version: WorkflowVersionRecord,
-  ): void {
-    setImmediate(() => void this.execute(evaluationRun, cases, version));
-  }
 
   public async execute(
     evaluationRun: EvaluationRunRecord,
@@ -84,12 +77,36 @@ export class EvaluationExecutor {
               evaluation_case_id: evaluationCase.id,
             },
           });
-          await this.runExecutor.execute(workflowRun, version);
-          const completed = await this.store.getRun(
+          const jobId = await this.queue.enqueueRun(
+            workflowRun.id,
+            `evaluation-${evaluationRun.id}-${evaluationCase.id}`,
+          );
+          await this.store.updateRun(workflowRun.id, { queueJobId: jobId });
+          await this.store.addTrace({
+            runId: workflowRun.id,
+            nodeRunId: null,
+            eventType: 'RUN_QUEUED',
+            metadata: { job_id: jobId, evaluation_run_id: evaluationRun.id },
+          });
+          let completed = await this.store.getRun(
             evaluationRun.projectId,
             evaluationRun.workflowId,
             workflowRun.id,
           );
+          const deadline = Date.now() + 120_000;
+          while (
+            completed &&
+            !['COMPLETED', 'FAILED', 'CANCELLED'].includes(completed.status) &&
+            Date.now() < deadline
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            completed = await this.store.getRun(
+              evaluationRun.projectId,
+              evaluationRun.workflowId,
+              workflowRun.id,
+            );
+          }
+
           const nodeRuns = await this.store.listNodeRuns(workflowRun.id);
           const llmOutput = nodeRuns.find((node) => node.nodeType === 'LLM')?.output ?? null;
           const latencyMs =

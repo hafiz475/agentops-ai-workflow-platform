@@ -32,6 +32,7 @@ const nodeLabels: Record<NodeType, string> = {
   INPUT: 'Runtime input',
   PROMPT: 'Prompt template',
   LLM: 'Model generation',
+  HUMAN_APPROVAL: 'Human approval',
   OUTPUT: 'Final output',
 };
 
@@ -55,7 +56,13 @@ export const createWorkflowNode = (
       ? { template: 'Answer this clearly for a beginner: {{input}}' }
       : nodeType === 'LLM'
         ? { provider: 'configured-default', model: 'configured-default', temperature: 0 }
-        : {};
+        : nodeType === 'HUMAN_APPROVAL'
+          ? {
+              title: 'Approve generated response',
+              instructions: 'Review generated response before continuing.',
+              allow_reject: true,
+            }
+          : {};
   return {
     id,
     type: 'workflow',
@@ -65,7 +72,7 @@ export const createWorkflowNode = (
 };
 
 export const pollingIntervalForStatus = (status: Run['status'] | undefined): number | false =>
-  status === 'QUEUED' || status === 'RUNNING' ? 800 : false;
+  status === 'QUEUED' || status === 'RUNNING' || status === 'WAITING_FOR_APPROVAL' ? 800 : false;
 
 const toCanvasNode = (node: GraphNode): CanvasNode => ({
   id: node.id,
@@ -133,7 +140,11 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
     queryFn: () => api.getTrace(projectId, workflow.id, currentRun?.id ?? ''),
     enabled: Boolean(currentRun?.id),
     refetchInterval:
-      currentRun?.status === 'QUEUED' || currentRun?.status === 'RUNNING' ? 800 : false,
+      currentRun?.status === 'QUEUED' ||
+      currentRun?.status === 'RUNNING' ||
+      currentRun?.status === 'WAITING_FOR_APPROVAL'
+        ? 800
+        : false,
   });
 
   useEffect(() => {
@@ -175,6 +186,14 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
     onError: (error) => setMessage(error.message),
   });
 
+  const cancelRun = useMutation({
+    mutationFn: () => api.cancelRun(projectId, workflow.id, currentRun?.id ?? ''),
+    onSuccess: (updated) => {
+      setRun(updated);
+      setMessage('Run cancellation requested.');
+    },
+    onError: (error) => setMessage(error.message),
+  });
   const addNode = (nodeType: NodeType) => {
     const node = createWorkflowNode(nodeType, nodes.length);
     const preferredPromptVersion = promptVersions[0];
@@ -185,7 +204,7 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
     setNodes((current) => [...current, node]);
     setSelectedId(node.id);
   };
-  const updateConfig = (key: string, value: string | number) => {
+  const updateConfig = (key: string, value: string | number | boolean) => {
     if (!selectedId) return;
     setNodes((current) =>
       current.map((node) =>
@@ -238,7 +257,7 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
       <div className="editor-layout">
         <aside className="palette">
           <h2>Nodes</h2>
-          {(['INPUT', 'PROMPT', 'LLM', 'OUTPUT'] as NodeType[]).map((type) => (
+          {(['INPUT', 'PROMPT', 'LLM', 'HUMAN_APPROVAL', 'OUTPUT'] as NodeType[]).map((type) => (
             <button key={type} onClick={() => addNode(type)}>
               + {type}
             </button>
@@ -337,6 +356,36 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
               </label>
             </>
           )}
+          {selected?.data.nodeType === 'HUMAN_APPROVAL' && (
+            <>
+              <label>
+                Approval title
+                <input
+                  value={String((selected.data.config as Record<string, unknown>).title ?? '')}
+                  onChange={(event) => updateConfig('title', event.target.value)}
+                />
+              </label>
+              <label>
+                Instructions
+                <textarea
+                  value={String(
+                    (selected.data.config as Record<string, unknown>).instructions ?? '',
+                  )}
+                  onChange={(event) => updateConfig('instructions', event.target.value)}
+                />
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={Boolean(
+                    (selected.data.config as Record<string, unknown>).allow_reject ?? true,
+                  )}
+                  onChange={(event) => updateConfig('allow_reject', event.target.checked)}
+                />{' '}
+                Allow rejection
+              </label>
+            </>
+          )}{' '}
           <div className="action-stack">
             <button disabled={readOnlyVersion !== null} onClick={() => save.mutate()}>
               Save draft
@@ -417,11 +466,26 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
               {currentRun.status}
             </span>
             <h2>Run result</h2>
+            <p>
+              Attempt {currentRun.attemptCount} of {currentRun.maxAttempts}
+            </p>
+            {['QUEUED', 'RUNNING', 'WAITING_FOR_APPROVAL'].includes(currentRun.status) && (
+              <button className="ghost" onClick={() => cancelRun.mutate()}>
+                Cancel run
+              </button>
+            )}
             <code>{currentRun.id}</code>
             {currentRun.output && (
               <pre>
                 {String(currentRun.output.text ?? JSON.stringify(currentRun.output, null, 2))}
               </pre>
+            )}
+            {currentRun.status === 'WAITING_FOR_APPROVAL' && (
+              <p className="validation-message">
+                <strong>WAITING FOR APPROVAL</strong>
+                <br />
+                Open the Approvals inbox to approve or reject this run.
+              </p>
             )}
             {currentRun.errorMessage && <p className="error">{currentRun.errorMessage}</p>}
           </article>

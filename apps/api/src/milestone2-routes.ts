@@ -1,7 +1,7 @@
 import { evaluatorConfigSchema, type WorkflowGraph } from '@agentops/contracts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { EvaluationExecutor } from './evaluation-executor.js';
+import type { DurableQueue } from './queue.js';
 import { validateEvaluator } from './evaluators.js';
 import { validatePromptTemplate, validateWorkflowGraph } from './graph.js';
 import type { EvaluationRunRecord, Store } from './store.js';
@@ -67,7 +67,7 @@ export const validatePromptVersionReferences = async (
 export const registerMilestone2Routes = async (
   app: FastifyInstance,
   store: Store,
-  evaluationExecutor: EvaluationExecutor,
+  queue: DurableQueue,
 ): Promise<void> => {
   app.post('/api/v1/projects/:projectId/prompts', async (request, reply) => {
     const params = projectParams.safeParse(request.params);
@@ -269,7 +269,17 @@ export const registerMilestone2Routes = async (
       },
       'evaluation.created',
     );
-    evaluationExecutor.enqueue(run, cases, version);
+    try {
+      await queue.enqueueEvaluation(run.id);
+    } catch {
+      await store.updateEvaluationRun(run.id, {
+        status: 'FAILED',
+        completedAt: new Date().toISOString(),
+        errorCode: 'QUEUE_UNAVAILABLE',
+        errorMessage: 'Evaluation could not be queued.',
+      });
+      return reply.code(503).send({ error: 'QUEUE_UNAVAILABLE', evaluationRunId: run.id });
+    }
     return reply.code(202).send(run);
   });
   app.get('/api/v1/projects/:projectId/evaluation-runs', async (request, reply) => {

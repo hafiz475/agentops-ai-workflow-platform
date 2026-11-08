@@ -4,6 +4,7 @@ import type {
   EvaluatorConfig,
   NodeRunStatus,
   RunStatus,
+  ApprovalStatus,
   WorkflowGraph,
 } from '@agentops/contracts';
 import type { Pool } from 'pg';
@@ -44,6 +45,12 @@ export interface RunRecord {
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
+  queueJobId: string | null;
+  attemptCount: number;
+  maxAttempts: number;
+  lastAttemptAt: string | null;
+  cancellationRequestedAt: string | null;
+  cancellationReason: string | null;
 }
 export interface NodeRunRecord {
   id: string;
@@ -58,6 +65,23 @@ export interface NodeRunRecord {
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
+}
+export interface ApprovalRequestRecord {
+  id: string;
+  projectId: string;
+  runId: string;
+  nodeRunId: string;
+  status: ApprovalStatus;
+  title: string;
+  instructions: string;
+  requestedAt: string;
+  decidedAt: string | null;
+  decision: string | null;
+  reviewerId: string | null;
+  reviewerLabel: string | null;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface TraceEventRecord {
   id: string;
@@ -177,16 +201,29 @@ export interface Store {
   }): Promise<RunRecord>;
   listRuns(projectId: string, workflowId: string): Promise<RunRecord[]>;
   getRun(projectId: string, workflowId: string, runId: string): Promise<RunRecord | null>;
+  getRunById(runId: string): Promise<RunRecord | null>;
+  listRecoverableRuns(): Promise<RunRecord[]>;
   updateRun(
     runId: string,
     patch: Partial<
       Pick<
         RunRecord,
-        'status' | 'output' | 'errorCode' | 'errorMessage' | 'startedAt' | 'completedAt'
+        | 'status'
+        | 'output'
+        | 'errorCode'
+        | 'errorMessage'
+        | 'startedAt'
+        | 'completedAt'
+        | 'queueJobId'
+        | 'attemptCount'
+        | 'lastAttemptAt'
+        | 'cancellationRequestedAt'
+        | 'cancellationReason'
       >
     >,
   ): Promise<void>;
   createNodeRun(input: { runId: string; nodeId: string; nodeType: string }): Promise<NodeRunRecord>;
+  getNodeRun(runId: string, nodeId: string): Promise<NodeRunRecord | null>;
   updateNodeRun(
     id: string,
     patch: Partial<
@@ -197,6 +234,22 @@ export interface Store {
     >,
   ): Promise<void>;
   listNodeRuns(runId: string): Promise<NodeRunRecord[]>;
+  createApproval(input: {
+    projectId: string;
+    runId: string;
+    nodeRunId: string;
+    title: string;
+    instructions: string;
+  }): Promise<ApprovalRequestRecord>;
+  listApprovals(projectId: string): Promise<ApprovalRequestRecord[]>;
+  getApproval(projectId: string, approvalId: string): Promise<ApprovalRequestRecord | null>;
+  getApprovalForNodeRun(nodeRunId: string): Promise<ApprovalRequestRecord | null>;
+  decideApproval(
+    projectId: string,
+    approvalId: string,
+    decision: 'APPROVED' | 'REJECTED' | 'CANCELLED',
+    reason: string | null,
+  ): Promise<ApprovalRequestRecord | null>;
   addTrace(input: {
     runId: string;
     nodeRunId: string | null;
@@ -255,6 +308,7 @@ export interface Store {
   }): Promise<EvaluationRunRecord>;
   listEvaluationRuns(projectId: string): Promise<EvaluationRunRecord[]>;
   getEvaluationRun(projectId: string, runId: string): Promise<EvaluationRunRecord | null>;
+  getEvaluationRunById(runId: string): Promise<EvaluationRunRecord | null>;
   updateEvaluationRun(
     runId: string,
     patch: Partial<
@@ -316,6 +370,13 @@ const runFromRow = (row: Record<string, unknown>): RunRecord => ({
   startedAt: row.started_at === null ? null : String(row.started_at),
   completedAt: row.completed_at === null ? null : String(row.completed_at),
   createdAt: String(row.created_at),
+  queueJobId: row.queue_job_id == null ? null : String(row.queue_job_id),
+  attemptCount: Number(row.attempt_count ?? 0),
+  maxAttempts: Number(row.max_attempts ?? 3),
+  lastAttemptAt: row.last_attempt_at == null ? null : String(row.last_attempt_at),
+  cancellationRequestedAt:
+    row.cancellation_requested_at == null ? null : String(row.cancellation_requested_at),
+  cancellationReason: row.cancellation_reason == null ? null : String(row.cancellation_reason),
 });
 const nodeRunFromRow = (row: Record<string, unknown>): NodeRunRecord => ({
   id: String(row.id),
@@ -330,6 +391,23 @@ const nodeRunFromRow = (row: Record<string, unknown>): NodeRunRecord => ({
   startedAt: row.started_at === null ? null : String(row.started_at),
   completedAt: row.completed_at === null ? null : String(row.completed_at),
   createdAt: String(row.created_at),
+});
+const approvalFromRow = (row: Record<string, unknown>): ApprovalRequestRecord => ({
+  id: String(row.id),
+  projectId: String(row.project_id),
+  runId: String(row.run_id),
+  nodeRunId: String(row.node_run_id),
+  status: row.status as ApprovalStatus,
+  title: String(row.title),
+  instructions: String(row.instructions),
+  requestedAt: String(row.requested_at),
+  decidedAt: row.decided_at == null ? null : String(row.decided_at),
+  decision: row.decision == null ? null : String(row.decision),
+  reviewerId: row.reviewer_id == null ? null : String(row.reviewer_id),
+  reviewerLabel: row.reviewer_label == null ? null : String(row.reviewer_label),
+  reason: row.reason == null ? null : String(row.reason),
+  createdAt: String(row.created_at),
+  updatedAt: String(row.updated_at),
 });
 const traceFromRow = (row: Record<string, unknown>): TraceEventRecord => ({
   id: String(row.id),
@@ -559,17 +637,37 @@ export class PostgresStore implements Store {
     );
     return rows[0] ? runFromRow(rows[0] as Record<string, unknown>) : null;
   }
+  public async getRunById(runId: string): Promise<RunRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM runs WHERE id=$1', [runId]);
+    return rows[0] ? runFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async listRecoverableRuns(): Promise<RunRecord[]> {
+    const { rows } = await this.pool.query(
+      "SELECT * FROM runs WHERE status IN ('QUEUED','RUNNING') ORDER BY created_at",
+    );
+    return rows.map((row) => runFromRow(row as Record<string, unknown>));
+  }
   public async updateRun(
     runId: string,
     patch: Partial<
       Pick<
         RunRecord,
-        'status' | 'output' | 'errorCode' | 'errorMessage' | 'startedAt' | 'completedAt'
+        | 'status'
+        | 'output'
+        | 'errorCode'
+        | 'errorMessage'
+        | 'startedAt'
+        | 'completedAt'
+        | 'queueJobId'
+        | 'attemptCount'
+        | 'lastAttemptAt'
+        | 'cancellationRequestedAt'
+        | 'cancellationReason'
       >
     >,
   ): Promise<void> {
     await this.pool.query(
-      'UPDATE runs SET status=COALESCE($2,status),output_json=COALESCE($3,output_json),error_code=$4,error_message=$5,started_at=COALESCE($6,started_at),completed_at=COALESCE($7,completed_at) WHERE id=$1',
+      'UPDATE runs SET status=COALESCE($2,status),output_json=COALESCE($3,output_json),error_code=$4,error_message=$5,started_at=COALESCE($6,started_at),completed_at=COALESCE($7,completed_at),queue_job_id=COALESCE($8,queue_job_id),attempt_count=COALESCE($9,attempt_count),last_attempt_at=COALESCE($10,last_attempt_at),cancellation_requested_at=COALESCE($11,cancellation_requested_at),cancellation_reason=COALESCE($12,cancellation_reason) WHERE id=$1',
       [
         runId,
         patch.status ?? null,
@@ -578,6 +676,11 @@ export class PostgresStore implements Store {
         patch.errorMessage ?? null,
         patch.startedAt ?? null,
         patch.completedAt ?? null,
+        patch.queueJobId ?? null,
+        patch.attemptCount ?? null,
+        patch.lastAttemptAt ?? null,
+        patch.cancellationRequestedAt ?? null,
+        patch.cancellationReason ?? null,
       ],
     );
   }
@@ -587,10 +690,17 @@ export class PostgresStore implements Store {
     nodeType: string;
   }): Promise<NodeRunRecord> {
     const { rows } = await this.pool.query(
-      "INSERT INTO node_runs(run_id,node_id,node_type,status) VALUES($1,$2,$3,'PENDING') RETURNING *",
+      "INSERT INTO node_runs(run_id,node_id,node_type,status) VALUES($1,$2,$3,'PENDING') ON CONFLICT (run_id,node_id) DO UPDATE SET node_type=EXCLUDED.node_type RETURNING *",
       [input.runId, input.nodeId, input.nodeType],
     );
     return nodeRunFromRow(rows[0] as Record<string, unknown>);
+  }
+  public async getNodeRun(runId: string, nodeId: string): Promise<NodeRunRecord | null> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM node_runs WHERE run_id=$1 AND node_id=$2',
+      [runId, nodeId],
+    );
+    return rows[0] ? nodeRunFromRow(rows[0] as Record<string, unknown>) : null;
   }
   public async updateNodeRun(
     id: string,
@@ -621,6 +731,54 @@ export class PostgresStore implements Store {
       [runId],
     );
     return rows.map((row) => nodeRunFromRow(row as Record<string, unknown>));
+  }
+  public async createApproval(input: {
+    projectId: string;
+    runId: string;
+    nodeRunId: string;
+    title: string;
+    instructions: string;
+  }): Promise<ApprovalRequestRecord> {
+    const { rows } = await this.pool.query(
+      'INSERT INTO approval_requests(project_id,run_id,node_run_id,title,instructions) VALUES($1,$2,$3,$4,$5) ON CONFLICT (node_run_id) DO UPDATE SET updated_at=NOW() RETURNING *',
+      [input.projectId, input.runId, input.nodeRunId, input.title, input.instructions],
+    );
+    return approvalFromRow(rows[0] as Record<string, unknown>);
+  }
+  public async listApprovals(projectId: string): Promise<ApprovalRequestRecord[]> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM approval_requests WHERE project_id=$1 ORDER BY requested_at DESC',
+      [projectId],
+    );
+    return rows.map((row) => approvalFromRow(row as Record<string, unknown>));
+  }
+  public async getApproval(
+    projectId: string,
+    approvalId: string,
+  ): Promise<ApprovalRequestRecord | null> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM approval_requests WHERE project_id=$1 AND id=$2',
+      [projectId, approvalId],
+    );
+    return rows[0] ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async getApprovalForNodeRun(nodeRunId: string): Promise<ApprovalRequestRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM approval_requests WHERE node_run_id=$1', [
+      nodeRunId,
+    ]);
+    return rows[0] ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async decideApproval(
+    projectId: string,
+    approvalId: string,
+    decision: 'APPROVED' | 'REJECTED' | 'CANCELLED',
+    reason: string | null,
+  ): Promise<ApprovalRequestRecord | null> {
+    const { rows } = await this.pool.query(
+      "UPDATE approval_requests SET status=$3,decision=$3,reason=$4,reviewer_label='demo-reviewer',decided_at=NOW(),updated_at=NOW() WHERE project_id=$1 AND id=$2 AND status='PENDING' RETURNING *",
+      [projectId, approvalId, decision, reason],
+    );
+    return rows[0] ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
   }
   public async addTrace(input: {
     runId: string;
@@ -830,6 +988,10 @@ export class PostgresStore implements Store {
       'SELECT * FROM evaluation_runs WHERE project_id=$1 AND id=$2',
       [projectId, runId],
     );
+    return rows[0] ? evaluationRunFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async getEvaluationRunById(runId: string): Promise<EvaluationRunRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM evaluation_runs WHERE id=$1', [runId]);
     return rows[0] ? evaluationRunFromRow(rows[0] as Record<string, unknown>) : null;
   }
   public async updateEvaluationRun(

@@ -1102,10 +1102,12 @@ sudo systemctl is-active agentops-compose.service
 curl -fsS http://127.0.0.1:3000/ &gt;/dev/null &amp;&amp; echo "frontend: ok"
 curl -fsS http://127.0.0.1:3001/health
 curl -fsS http://127.0.0.1:3001/ready
-curl -fsS http://127.0.0.1:8000/health</code></pre>
+sudo docker compose exec -T ai-service python -c &quot;import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read().decode())&quot;</code></pre>
     <p>Expected results:</p>
     <ul>
-      <li>All five containers are Up; API, AI service, PostgreSQL, and Redis report healthy.</li>
+      <li>
+        All six containers are Up; API, worker, AI service, PostgreSQL, and Redis report healthy.
+      </li>
       <li>The service reports <code>enabled</code> and <code>active</code>.</li>
       <li>API health and readiness return <code>{"status":"ok",...}</code>.</li>
     </ul>
@@ -1425,12 +1427,12 @@ sudo docker compose ps</code></pre>
         configured.
       </li>
       <li>Application authentication and authorization are still planned.</li>
+      <li>Workflow and evaluation execution use BullMQ and a dedicated durable Node worker.</li>
+      <li>Linear INPUT, PROMPT, LLM, HUMAN_APPROVAL, and OUTPUT nodes are supported.</li>
       <li>
-        Workflow execution runs asynchronously inside the Fastify API process instead of a durable
-        worker queue.
+        Conditions, transforms, HTTP tools, branching, RAG, agents, and production authentication
+        remain planned.
       </li>
-      <li>Only INPUT, PROMPT, LLM, and OUTPUT node types are currently supported.</li>
-      <li>RAG, tools, conditions, human approval, and evaluations are not yet implemented.</li>
       <li>The single-VM portfolio/demo architecture is not highly available.</li>
       <li>PostgreSQL and Redis use Docker volumes on the VM.</li>
       <li>Independent production backup and recovery are not yet configured.</li>
@@ -1439,6 +1441,22 @@ sudo docker compose ps</code></pre>
       </li>
       <li>The Azure promotional credit expires; the budget only alerts.</li>
     </ul>
+    <h3>12.10 Milestone 3 durable worker verification</h3>
+    <ol>
+      <li>
+        Confirm <code>docker compose ps</code> lists <code>web</code>, <code>api</code>,
+        <code>worker</code>, <code>ai-service</code>, <code>postgres</code>, and <code>redis</code>.
+      </li>
+      <li>
+        Inspect <code>docker compose logs --tail=100 worker</code> for <code>worker.ready</code>.
+      </li>
+      <li>Run a normal workflow and confirm it completes through the queue.</li>
+      <li>
+        Run a HUMAN_APPROVAL workflow; approve it and confirm completed LLM nodes are not repeated.
+      </li>
+      <li>Repeat with Reject and Cancel, then launch an evaluation.</li>
+      <li>Keep ports 8000, 5432, and 6379 private; only 3000 and 3001 are published by Compose.</li>
+    </ol>
     <h3>Final checklist</h3>
     <table>
       <tr>
@@ -1483,11 +1501,11 @@ sudo docker compose ps</code></pre>
       </tr>
       <tr>
         <td class="check">Complete</td>
-        <td>Milestone 2 uses the same CI-gated automatic Azure deployment pipeline</td>
+        <td>Milestone 3 deploys the dedicated worker through the same CI-gated Azure pipeline</td>
       </tr>
     </table>
     <p class="footer-note">
-      End of runbook &middot; AgentOps Studio Milestone 2 &middot; Azure deployment, GitHub OIDC
+      End of runbook &middot; AgentOps Studio Milestone 3 &middot; Azure deployment, GitHub OIDC
       CI/CD, and AI workflow execution
     </p>
   </body>

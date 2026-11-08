@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { WorkflowGraph } from '@agentops/contracts';
 import type {
+  ApprovalRequestRecord,
   NodeRunRecord,
   ProjectRecord,
   PromptRecord,
@@ -24,6 +25,7 @@ export class MemoryStore implements Store {
   public runs: RunRecord[] = [];
   public nodeRuns: NodeRunRecord[] = [];
   public traces: TraceEventRecord[] = [];
+  public approvals: ApprovalRequestRecord[] = [];
   public prompts: PromptRecord[] = [];
   public promptVersions: PromptVersionRecord[] = [];
   public evaluationDatasets: EvaluationDatasetRecord[] = [];
@@ -112,6 +114,12 @@ export class MemoryStore implements Store {
       startedAt: null,
       completedAt: null,
       createdAt: now(),
+      queueJobId: null,
+      attemptCount: 0,
+      maxAttempts: 3,
+      lastAttemptAt: null,
+      cancellationRequestedAt: null,
+      cancellationReason: null,
     };
     this.runs.push(item);
     return item;
@@ -126,12 +134,28 @@ export class MemoryStore implements Store {
       ) ?? null
     );
   }
+  async getRunById(runId: string) {
+    return this.runs.find((r) => r.id === runId) ?? null;
+  }
+  async listRecoverableRuns() {
+    return this.runs.filter((r) => ['QUEUED', 'RUNNING'].includes(r.status));
+  }
   async updateRun(
     runId: string,
     patch: Partial<
       Pick<
         RunRecord,
-        'status' | 'output' | 'errorCode' | 'errorMessage' | 'startedAt' | 'completedAt'
+        | 'status'
+        | 'output'
+        | 'errorCode'
+        | 'errorMessage'
+        | 'startedAt'
+        | 'completedAt'
+        | 'queueJobId'
+        | 'attemptCount'
+        | 'lastAttemptAt'
+        | 'cancellationRequestedAt'
+        | 'cancellationReason'
       >
     >,
   ) {
@@ -139,6 +163,10 @@ export class MemoryStore implements Store {
     if (item) Object.assign(item, patch);
   }
   async createNodeRun(input: { runId: string; nodeId: string; nodeType: string }) {
+    const existing = this.nodeRuns.find(
+      (item) => item.runId === input.runId && item.nodeId === input.nodeId,
+    );
+    if (existing) return existing;
     const item: NodeRunRecord = {
       id: randomUUID(),
       ...input,
@@ -154,6 +182,9 @@ export class MemoryStore implements Store {
     this.nodeRuns.push(item);
     return item;
   }
+  async getNodeRun(runId: string, nodeId: string) {
+    return this.nodeRuns.find((r) => r.runId === runId && r.nodeId === nodeId) ?? null;
+  }
   async updateNodeRun(
     id: string,
     patch: Partial<
@@ -168,6 +199,63 @@ export class MemoryStore implements Store {
   }
   async listNodeRuns(runId: string) {
     return this.nodeRuns.filter((r) => r.runId === runId);
+  }
+  async createApproval(input: {
+    projectId: string;
+    runId: string;
+    nodeRunId: string;
+    title: string;
+    instructions: string;
+  }) {
+    const existing = this.approvals.find((item) => item.nodeRunId === input.nodeRunId);
+    if (existing) return existing;
+    const item: ApprovalRequestRecord = {
+      id: randomUUID(),
+      ...input,
+      status: 'PENDING',
+      requestedAt: now(),
+      decidedAt: null,
+      decision: null,
+      reviewerId: null,
+      reviewerLabel: null,
+      reason: null,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.approvals.push(item);
+    return item;
+  }
+  async listApprovals(projectId: string) {
+    return this.approvals.filter((item) => item.projectId === projectId);
+  }
+  async getApproval(projectId: string, approvalId: string) {
+    return (
+      this.approvals.find((item) => item.projectId === projectId && item.id === approvalId) ?? null
+    );
+  }
+  async getApprovalForNodeRun(nodeRunId: string) {
+    return this.approvals.find((item) => item.nodeRunId === nodeRunId) ?? null;
+  }
+  async decideApproval(
+    projectId: string,
+    approvalId: string,
+    decision: 'APPROVED' | 'REJECTED' | 'CANCELLED',
+    reason: string | null,
+  ) {
+    const item = this.approvals.find(
+      (value) =>
+        value.projectId === projectId && value.id === approvalId && value.status === 'PENDING',
+    );
+    if (!item) return null;
+    Object.assign(item, {
+      status: decision,
+      decision,
+      reason,
+      reviewerLabel: 'demo-reviewer',
+      decidedAt: now(),
+      updatedAt: now(),
+    });
+    return item;
   }
   async addTrace(input: {
     runId: string;
@@ -322,6 +410,9 @@ export class MemoryStore implements Store {
     return (
       this.evaluationRuns.find((item) => item.projectId === projectId && item.id === runId) ?? null
     );
+  }
+  async getEvaluationRunById(runId: string) {
+    return this.evaluationRuns.find((item) => item.id === runId) ?? null;
   }
   async updateEvaluationRun(
     runId: string,

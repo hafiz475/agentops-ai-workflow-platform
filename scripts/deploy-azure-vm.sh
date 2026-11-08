@@ -60,11 +60,31 @@ wait_for_url() {
   return 1
 }
 
-if ! wait_for_url "API readiness" "http://127.0.0.1:3001/ready" ||
+wait_for_worker() {
+  local attempts=30
+  local container_id
+  container_id="$("${compose[@]}" ps -q worker)"
+  if [[ -z "${container_id}" ]]; then
+    echo "Worker container is missing." >&2
+    return 1
+  fi
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if [[ "$(sudo -n docker inspect --format '{{.State.Health.Status}}' "${container_id}")" == "healthy" ]]; then
+      echo "Worker: healthy"
+      return 0
+    fi
+    echo "Worker: waiting (${attempt}/${attempts})"
+    sleep 5
+  done
+  echo "Worker health check failed" >&2
+  return 1
+}
+if ! wait_for_worker ||
+  ! wait_for_url "API readiness" "http://127.0.0.1:3001/ready" ||
   ! wait_for_url "Persisted API routes" "http://127.0.0.1:3001/api/v1/projects" ||
   ! wait_for_url "Frontend" "http://127.0.0.1:3000/"; then
   "${compose[@]}" ps >&2
-  "${compose[@]}" logs --tail=100 api web >&2
+  "${compose[@]}" logs --tail=100 api worker web >&2
   exit 1
 fi
 
