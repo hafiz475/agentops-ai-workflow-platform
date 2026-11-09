@@ -24,8 +24,16 @@ jobs:
       - run: npm run typecheck
       - name: Test shared contracts
         run: npm test --workspace=@agentops/contracts
-      - name: Test control-plane API
-        run: npm test --workspace=@agentops/api
+      - name: Test API service probes
+        run: npx tsx --test apps/api/test/app.test.ts
+      - name: Test API graph validation
+        run: npx tsx --test apps/api/test/graph.test.ts
+      - name: Test API workflow execution
+        run: npx tsx --test apps/api/test/workflow.test.ts
+      - name: Test API prompts and evaluations
+        run: npx tsx --test apps/api/test/milestone2.test.ts
+      - name: Test API durability and approvals
+        run: npx tsx --test apps/api/test/milestone3.test.ts
       - name: Test dashboard
         run: npm test --workspace=@agentops/web
       - run: npm run build
