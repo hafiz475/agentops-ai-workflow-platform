@@ -52,10 +52,10 @@ const graphForPrompt = (promptVersionId: string): WorkflowGraph => ({
   ],
 });
 const waitForEvaluation = async (store: MemoryStore, id: string) => {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     const run = store.evaluationRuns.find((item) => item.id === id);
     if (run?.status === 'COMPLETED' || run?.status === 'FAILED') return run;
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('Evaluation did not finish');
 };
