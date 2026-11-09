@@ -22,7 +22,12 @@ jobs:
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      - name: Test shared contracts
+        run: npm test --workspace=@agentops/contracts
+      - name: Test control-plane API
+        run: npm test --workspace=@agentops/api
+      - name: Test dashboard
+        run: npm test --workspace=@agentops/web
       - run: npm run build
 
   python:
