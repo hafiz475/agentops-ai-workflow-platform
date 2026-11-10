@@ -30,6 +30,7 @@ const worker = new Worker<RunJobData>(
   async (job: Job<RunJobData>) => {
     const run = await store.getRunById(job.data.runId);
     if (!run) throw new Error(`Run ${job.data.runId} does not exist.`);
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status)) return run.status;
     const version = await store.getVersion(run.projectId, run.workflowId, run.workflowVersionId);
     if (!version)
       throw new Error(
@@ -89,6 +90,7 @@ const worker = new Worker<RunJobData>(
         eventType: 'RUN_FAILED',
         metadata: { code: 'MAX_ATTEMPTS_EXCEEDED' },
       });
+      job.discard();
       throw error;
     }
   },

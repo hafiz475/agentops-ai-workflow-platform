@@ -49,7 +49,11 @@ export class RunExecutor {
     const priorStatus = current.status;
     await this.store.updateRun(run.id, {
       status: 'RUNNING',
-      startedAt: current.startedAt ?? new Date().toISOString(),
+      // PostgreSQL drivers return timestamps as Date objects. The store's public
+      // record is serializable, so an existing value may no longer be a safe SQL
+      // timestamp literal when it reaches us again. It also does not need to be
+      // rewritten while resuming an approval-paused run.
+      ...(current.startedAt ? {} : { startedAt: new Date().toISOString() }),
     });
     if (priorStatus !== 'RUNNING')
       await this.store.addTrace({

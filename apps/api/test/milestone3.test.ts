@@ -101,6 +101,12 @@ describe('Milestone 3 durable execution', () => {
     const approval = store.approvals[0];
     assert.ok(approval);
     await store.decideApproval(project.id, approval.id, 'APPROVED', 'looks good');
+    const updateRun = store.updateRun.bind(store);
+    store.updateRun = async (runId, patch) => {
+      if (patch.status === 'RUNNING' && 'startedAt' in patch)
+        throw new Error('An existing startedAt timestamp must not be rewritten during resume.');
+      await updateRun(runId, patch);
+    };
     assert.equal(await executor.execute((await store.getRunById(run.id))!, version), 'COMPLETED');
     assert.equal(modelCalls, 1);
     assert.equal(store.nodeRuns.length, 5);
