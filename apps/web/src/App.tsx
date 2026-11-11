@@ -93,8 +93,8 @@ function Studio() {
           </button>
         </nav>
         <p>
-          Milestone 3<br />
-          <strong>Durable worker online</strong>
+          Milestone 4<br />
+          <strong>Branch-safe tools online</strong>
           {project && (
             <>
               <br />

@@ -573,6 +573,39 @@ td code {
 .delta-card {
   background: #eef5ef !important;
 }
+.node-condition,
+.node-transform,
+.node-http_request {
+  border-color: #8b5a14;
+}
+.branch-handle {
+  position: absolute;
+  right: 10px;
+  font-size: 8px;
+  font-weight: 900;
+}
+.true-handle {
+  top: 28%;
+  color: #08723a;
+}
+.false-handle {
+  top: 63%;
+  color: #a32626;
+}
+.security-warning {
+  border-left: 3px solid #b56c08;
+  background: #fff5df;
+  padding: 10px;
+  font-size: 12px;
+}
+.node-run-list {
+  margin-top: 16px;
+  padding-left: 20px;
+}
+.node-run-skipped {
+  color: #7b817d;
+  text-decoration: line-through;
+}
 @media (max-width: 1100px) {
   .metric-grid {
     grid-template-columns: repeat(3, 1fr);

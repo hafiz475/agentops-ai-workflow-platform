@@ -33,6 +33,9 @@ const nodeLabels: Record<NodeType, string> = {
   PROMPT: 'Prompt template',
   LLM: 'Model generation',
   HUMAN_APPROVAL: 'Human approval',
+  CONDITION: 'Deterministic branch',
+  TRANSFORM: 'Structured transform',
+  HTTP_REQUEST: 'Safe HTTP request',
   OUTPUT: 'Final output',
 };
 
@@ -41,7 +44,16 @@ const WorkflowNode = ({ data }: { data: CanvasData }) => (
     {data.nodeType !== 'INPUT' && <Handle type="target" position={Position.Left} />}
     <span>{data.nodeType}</span>
     <strong>{data.label}</strong>
-    {data.nodeType !== 'OUTPUT' && <Handle type="source" position={Position.Right} />}
+    {data.nodeType === 'CONDITION' ? (
+      <>
+        <Handle id="true" type="source" position={Position.Right} style={{ top: '38%' }} />
+        <Handle id="false" type="source" position={Position.Right} style={{ top: '72%' }} />
+        <small className="branch-handle true-handle">TRUE</small>
+        <small className="branch-handle false-handle">FALSE</small>
+      </>
+    ) : (
+      data.nodeType !== 'OUTPUT' && <Handle type="source" position={Position.Right} />
+    )}
   </div>
 );
 const nodeTypes = { workflow: WorkflowNode };
@@ -62,7 +74,20 @@ export const createWorkflowNode = (
               instructions: 'Review generated response before continuing.',
               allow_reject: true,
             }
-          : {};
+          : nodeType === 'CONDITION'
+            ? { path: 'text', operator: 'CONTAINS', value: 'approved' }
+            : nodeType === 'TRANSFORM'
+              ? { output: { text: '{{text}}', status: 'processed' } }
+              : nodeType === 'HTTP_REQUEST'
+                ? {
+                    method: 'GET',
+                    url: 'https://example.com',
+                    headers: {},
+                    timeout_ms: 10000,
+                    max_response_bytes: 1048576,
+                    retry_non_idempotent: false,
+                  }
+                : {};
   return {
     id,
     type: 'workflow',
@@ -74,11 +99,43 @@ export const createWorkflowNode = (
 export const pollingIntervalForStatus = (status: Run['status'] | undefined): number | false =>
   status === 'QUEUED' || status === 'RUNNING' || status === 'WAITING_FOR_APPROVAL' ? 800 : false;
 
+export const traceSummary = (event: { eventType: string; metadata: Record<string, unknown> }) => {
+  if (event.eventType === 'CONDITION_EVALUATED')
+    return `result: ${event.metadata.condition_result === true ? 'TRUE' : 'FALSE'}`;
+  if (event.eventType === 'BRANCH_SELECTED')
+    return `${String(event.metadata.selected_branch).toUpperCase()} branch selected`;
+  if (event.eventType === 'NODE_SKIPPED') return 'skipped: branch not selected';
+  if (event.eventType.startsWith('HTTP_REQUEST'))
+    return [
+      event.metadata.method,
+      event.metadata.host,
+      event.metadata.status,
+      event.metadata.latency_ms ? `${event.metadata.latency_ms} ms` : undefined,
+      event.metadata.reason,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  return event.metadata.prompt ? String(event.metadata.prompt) : '';
+};
+export const parseConditionValue = (value: string): string | number | boolean | null => {
+  if (/^-?\d+(\.\d+)?$/.test(value.trim())) return Number(value);
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (value === 'null') return null;
+  return value;
+};
+
 const toCanvasNode = (node: GraphNode): CanvasNode => ({
   id: node.id,
   type: 'workflow',
   position: node.position,
   data: { nodeType: node.type, label: nodeLabels[node.type], config: node.config },
+});
+const toCanvasEdge = (edge: WorkflowGraph['edges'][number]): Edge => ({
+  ...edge,
+  ...(edge.branch
+    ? { sourceHandle: edge.branch, label: edge.branch.toUpperCase(), data: { branch: edge.branch } }
+    : {}),
 });
 export const graphFromCanvas = (nodes: CanvasNode[], edges: Edge[]): WorkflowGraph => ({
   nodes: nodes.map((node) => ({
@@ -88,7 +145,17 @@ export const graphFromCanvas = (nodes: CanvasNode[], edges: Edge[]): WorkflowGra
     position: node.position,
     config: (node.data.config as Record<string, unknown> | undefined) ?? {},
   })),
-  edges: edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+  edges: edges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    ...((edge.sourceHandle === 'true' || edge.data?.branch === 'true') && {
+      branch: 'true' as const,
+    }),
+    ...((edge.sourceHandle === 'false' || edge.data?.branch === 'false') && {
+      branch: 'false' as const,
+    }),
+  })),
 });
 
 export interface WorkflowEditorProps {
@@ -102,7 +169,9 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(
     initialGraph.nodes.map(toCanvasNode),
   );
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(
+    initialGraph.edges.map(toCanvasEdge),
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [message, setMessage] = useState('Add four nodes, connect them, then validate.');
   const [runInput, setRunInput] = useState('Explain Docker simply');
@@ -204,7 +273,7 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
     setNodes((current) => [...current, node]);
     setSelectedId(node.id);
   };
-  const updateConfig = (key: string, value: string | number | boolean) => {
+  const updateConfig = (key: string, value: unknown) => {
     if (!selectedId) return;
     setNodes((current) =>
       current.map((node) =>
@@ -257,7 +326,18 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
       <div className="editor-layout">
         <aside className="palette">
           <h2>Nodes</h2>
-          {(['INPUT', 'PROMPT', 'LLM', 'HUMAN_APPROVAL', 'OUTPUT'] as NodeType[]).map((type) => (
+          {(
+            [
+              'INPUT',
+              'PROMPT',
+              'LLM',
+              'HUMAN_APPROVAL',
+              'CONDITION',
+              'TRANSFORM',
+              'HTTP_REQUEST',
+              'OUTPUT',
+            ] as NodeType[]
+          ).map((type) => (
             <button key={type} onClick={() => addNode(type)}>
               + {type}
             </button>
@@ -274,9 +354,21 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onConnect={(connection: Connection) =>
-              setEdges((current) => addEdge(connection, current))
-            }
+            onConnect={(connection: Connection) => {
+              const branch =
+                connection.sourceHandle === 'true' || connection.sourceHandle === 'false'
+                  ? connection.sourceHandle
+                  : undefined;
+              setEdges((current) =>
+                addEdge(
+                  {
+                    ...connection,
+                    ...(branch ? { label: branch.toUpperCase(), data: { branch } } : {}),
+                  },
+                  current,
+                ),
+              );
+            }}
             onNodeClick={(_event, node) => setSelectedId(node.id)}
             fitView
           >
@@ -385,6 +477,164 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
                 Allow rejection
               </label>
             </>
+          )}
+          {selected?.data.nodeType === 'CONDITION' && (
+            <>
+              <label>
+                Field path
+                <input
+                  aria-label="Condition field path"
+                  value={String((selected.data.config as Record<string, unknown>).path ?? '')}
+                  onChange={(event) => updateConfig('path', event.target.value)}
+                />
+              </label>
+              <label>
+                Operator
+                <select
+                  aria-label="Condition operator"
+                  value={String((selected.data.config as Record<string, unknown>).operator ?? '')}
+                  onChange={(event) => updateConfig('operator', event.target.value)}
+                >
+                  {[
+                    'EQUALS',
+                    'NOT_EQUALS',
+                    'CONTAINS',
+                    'NOT_CONTAINS',
+                    'EXISTS',
+                    'NOT_EXISTS',
+                    'GREATER_THAN',
+                    'GREATER_THAN_OR_EQUAL',
+                    'LESS_THAN',
+                    'LESS_THAN_OR_EQUAL',
+                    'STARTS_WITH',
+                    'ENDS_WITH',
+                  ].map((operator) => (
+                    <option key={operator}>{operator}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Comparison value
+                <input
+                  aria-label="Condition comparison value"
+                  value={String((selected.data.config as Record<string, unknown>).value ?? '')}
+                  onChange={(event) =>
+                    updateConfig('value', parseConditionValue(event.target.value))
+                  }
+                />
+              </label>
+              <p className="validation-message">Connect both labeled TRUE and FALSE handles.</p>
+            </>
+          )}
+          {selected?.data.nodeType === 'TRANSFORM' && (
+            <label>
+              Safe output mapping (JSON/templates)
+              <textarea
+                aria-label="Transform output mapping"
+                key={`${selected.id}-transform`}
+                defaultValue={JSON.stringify(
+                  (selected.data.config as Record<string, unknown>).output ?? {},
+                  null,
+                  2,
+                )}
+                onBlur={(event) => {
+                  try {
+                    updateConfig(
+                      'output',
+                      JSON.parse(event.target.value) as Record<string, unknown>,
+                    );
+                  } catch {
+                    setMessage('Transform mapping must be valid JSON.');
+                  }
+                }}
+              />
+              <small>Only constants and placeholders such as {'{{text}}'} are executed.</small>
+            </label>
+          )}
+          {selected?.data.nodeType === 'HTTP_REQUEST' && (
+            <>
+              <label>
+                Method
+                <select
+                  aria-label="HTTP method"
+                  value={String((selected.data.config as Record<string, unknown>).method ?? 'GET')}
+                  onChange={(event) => updateConfig('method', event.target.value)}
+                >
+                  {['GET', 'POST', 'PUT', 'PATCH'].map((method) => (
+                    <option key={method}>{method}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                URL
+                <input
+                  aria-label="HTTP URL"
+                  value={String((selected.data.config as Record<string, unknown>).url ?? '')}
+                  onChange={(event) => updateConfig('url', event.target.value)}
+                />
+              </label>
+              <label>
+                Headers (JSON; secret values use secret_ref)
+                <textarea
+                  aria-label="HTTP headers"
+                  key={`${selected.id}-headers`}
+                  defaultValue={JSON.stringify(
+                    (selected.data.config as Record<string, unknown>).headers ?? {},
+                    null,
+                    2,
+                  )}
+                  onBlur={(event) => {
+                    try {
+                      updateConfig(
+                        'headers',
+                        JSON.parse(event.target.value) as Record<string, unknown>,
+                      );
+                    } catch {
+                      setMessage('HTTP headers must be valid JSON.');
+                    }
+                  }}
+                />
+              </label>
+              <label>
+                Request body (JSON/templates)
+                <textarea
+                  aria-label="HTTP body"
+                  key={`${selected.id}-body`}
+                  defaultValue={JSON.stringify(
+                    (selected.data.config as Record<string, unknown>).body ?? {},
+                    null,
+                    2,
+                  )}
+                  onBlur={(event) => {
+                    try {
+                      updateConfig(
+                        'body',
+                        JSON.parse(event.target.value) as Record<string, unknown>,
+                      );
+                    } catch {
+                      setMessage('HTTP body must be valid JSON.');
+                    }
+                  }}
+                />
+              </label>
+              <label>
+                Timeout (milliseconds, max 30000)
+                <input
+                  aria-label="HTTP timeout"
+                  type="number"
+                  min="100"
+                  max="30000"
+                  value={Number(
+                    (selected.data.config as Record<string, unknown>).timeout_ms ?? 10000,
+                  )}
+                  onChange={(event) => updateConfig('timeout_ms', Number(event.target.value))}
+                />
+              </label>
+              <p className="security-warning">
+                External HTTP requests are executed by the backend and subject to security
+                restrictions. Secret values are never shown here.
+              </p>
+            </>
           )}{' '}
           <div className="action-stack">
             <button disabled={readOnlyVersion !== null} onClick={() => save.mutate()}>
@@ -419,7 +669,7 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
                   setSelectedVersionId(version.id);
                   setReadOnlyVersion(version.versionNumber);
                   setNodes(version.graph.nodes.map(toCanvasNode));
-                  setEdges(version.graph.edges);
+                  setEdges(version.graph.edges.map(toCanvasEdge));
                 }}
               >
                 Version {version.versionNumber}
@@ -431,7 +681,7 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
                 onClick={() => {
                   setReadOnlyVersion(null);
                   setNodes(initialGraph.nodes.map(toCanvasNode));
-                  setEdges(initialGraph.edges);
+                  setEdges(initialGraph.edges.map(toCanvasEdge));
                 }}
               >
                 Return to draft
@@ -488,6 +738,16 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
               </p>
             )}
             {currentRun.errorMessage && <p className="error">{currentRun.errorMessage}</p>}
+            {currentRun.nodeRuns && (
+              <ol className="node-run-list">
+                {currentRun.nodeRuns.map((nodeRun) => (
+                  <li key={nodeRun.id} className={`node-run-${nodeRun.status.toLowerCase()}`}>
+                    <strong>{nodeRun.nodeType}</strong> {nodeRun.status}
+                    {nodeRun.status === 'SKIPPED' && <small> — branch not selected</small>}
+                  </li>
+                ))}
+              </ol>
+            )}
           </article>
           <article>
             <h2>Trace timeline</h2>
@@ -496,7 +756,7 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
                 <li key={event.id}>
                   <strong>{event.eventType}</strong>
                   <small>{new Date(event.createdAt).toLocaleTimeString()}</small>
-                  {event.metadata.prompt ? <p>{String(event.metadata.prompt)}</p> : null}
+                  {traceSummary(event) ? <p>{traceSummary(event)}</p> : null}
                 </li>
               ))}
             </ol>

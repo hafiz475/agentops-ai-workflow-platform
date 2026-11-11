@@ -53,7 +53,7 @@ describe('workflow graph validation', () => {
         graph.nodes = graph.nodes.filter((node) => node.type !== 'OUTPUT');
         graph.edges = graph.edges.filter((edge) => edge.target !== 'output');
       },
-      'Exactly one OUTPUT',
+      'At least one OUTPUT',
     ],
     [
       'duplicate INPUT',
@@ -69,7 +69,7 @@ describe('workflow graph validation', () => {
       'Exactly one INPUT',
     ],
     [
-      'duplicate OUTPUT',
+      'disconnected second OUTPUT',
       (graph: WorkflowGraph) => {
         graph.nodes.push({
           id: 'output2',
@@ -79,7 +79,7 @@ describe('workflow graph validation', () => {
           config: {},
         });
       },
-      'Exactly one OUTPUT',
+      'exactly one incoming',
     ],
     [
       'invalid edge',
@@ -121,7 +121,7 @@ describe('workflow graph validation', () => {
     graph.edges = graph.edges.filter((edge) => edge.target !== 'output');
     assert.match(
       validateWorkflowGraph(graph).errors.join(' '),
-      /OUTPUT is not reachable from INPUT/i,
+      /At least one OUTPUT must be reachable from INPUT/i,
     );
   });
 

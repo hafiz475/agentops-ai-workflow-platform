@@ -34,6 +34,8 @@ jobs:
         run: npx tsx --test apps/api/test/milestone2.test.ts
       - name: Test API durability and approvals
         run: npx tsx --test apps/api/test/milestone3.test.ts
+      - name: Test API branching and safe HTTP tools
+        run: npx tsx --test apps/api/test/milestone4.test.ts
       - name: Test dashboard
         run: npm test --workspace=@agentops/web
       - run: npm run build

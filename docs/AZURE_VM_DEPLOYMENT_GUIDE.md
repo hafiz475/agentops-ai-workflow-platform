@@ -1,6 +1,6 @@
 # Azure VM deployment runbook � Milestone 3
 
-This extends the original visual Azure guide. The VM and OIDC pipeline remain unchanged; the release now starts six Compose services.
+This runbook now covers Milestone 4. The VM and OIDC pipeline remain unchanged; the release starts the same six Compose services and opens no new inbound ports.
 
 ## Azure portal settings retained
 
@@ -10,7 +10,7 @@ This extends the original visual Azure guide. The VM and OIDC pipeline remain un
 - NSG: TCP 22 only from the operator `/32`; TCP 3000 and 3001 from the internet
 - Never add public rules for 5432, 6379, or 8000
 - System-assigned identity, secure boot, vTPM, managed boot diagnostics
-- Tags: `application=agentops-studio`, `environment=demo`, `milestone=3`
+- Tags: `application=agentops-studio`, `environment=demo`, `milestone=4`
 
 ## Release command
 
@@ -53,6 +53,11 @@ Then smoke-test from the UI:
 5. Cancel a queued or waiting run.
 6. Launch an evaluation and confirm its case WorkflowRuns complete.
 7. Review `WORKER_CLAIMED_RUN`, approval, resume, retry/cancel, and completion trace events.
+8. Run a CONDITION workflow and confirm only one branch completes while the other has `SKIPPED` NodeRuns.
+9. Run TRANSFORM and a controlled public HTTP_REQUEST; confirm bounded response metadata and no sensitive headers in traces.
+10. Attempt `http://127.0.0.1` and a redirect to a private address; confirm `HTTP_REQUEST_BLOCKED` and a failed run.
+
+No NSG change is required: HTTP tools make outbound requests from the private worker. Do not expose worker, AI, PostgreSQL, or Redis ports. Optional tool secrets belong only in the VM `.env` as project-scoped `TOOL_SECRETS_JSON`; never put secret values in workflow JSON or GitHub variables.
 
 ## Budget and shutdown
 

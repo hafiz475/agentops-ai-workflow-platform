@@ -49,18 +49,112 @@ export const humanApprovalNodeSchema = nodeBaseSchema.extend({
     })
     .strict(),
 });
+export const conditionOperatorSchema = z.enum([
+  'EQUALS',
+  'NOT_EQUALS',
+  'CONTAINS',
+  'NOT_CONTAINS',
+  'EXISTS',
+  'NOT_EXISTS',
+  'GREATER_THAN',
+  'GREATER_THAN_OR_EQUAL',
+  'LESS_THAN',
+  'LESS_THAN_OR_EQUAL',
+  'STARTS_WITH',
+  'ENDS_WITH',
+]);
+export const conditionNodeSchema = nodeBaseSchema.extend({
+  type: z.literal('CONDITION'),
+  config: z
+    .object({
+      path: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_.]*$/),
+      operator: conditionOperatorSchema,
+      value: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
+    })
+    .strict(),
+});
+const transformValueSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(transformValueSchema),
+    z.record(z.string(), transformValueSchema),
+  ]),
+);
+export const transformNodeSchema = nodeBaseSchema.extend({
+  type: z.literal('TRANSFORM'),
+  config: z.object({ output: z.record(z.string(), transformValueSchema) }).strict(),
+});
+export const secretReferenceSchema = z
+  .object({ secret_ref: z.string().regex(/^[a-zA-Z0-9_-]+$/) })
+  .strict();
+const httpHeaderValueSchema = z.union([z.string(), secretReferenceSchema]);
+export const httpRequestNodeSchema = nodeBaseSchema.extend({
+  type: z.literal('HTTP_REQUEST'),
+  config: z
+    .object({
+      method: z.enum(['GET', 'POST', 'PUT', 'PATCH']),
+      url: z.string().url(),
+      headers: z.record(z.string(), httpHeaderValueSchema).default({}),
+      query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+      body: transformValueSchema.optional(),
+      timeout_ms: z.number().int().min(100).max(30_000).default(10_000),
+      max_response_bytes: z.number().int().min(1_024).max(5_242_880).default(1_048_576),
+      retry_non_idempotent: z.boolean().default(false),
+      idempotency_key_header: z.string().min(1).max(100).optional(),
+    })
+    .strict()
+    .superRefine((config, context) => {
+      const forbiddenHeaders = new Set([
+        'host',
+        'connection',
+        'content-length',
+        'transfer-encoding',
+        'upgrade',
+        'proxy-authorization',
+        'x-forwarded-host',
+      ]);
+      for (const name of Object.keys(config.headers)) {
+        if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+          context.addIssue({ code: 'custom', message: `Invalid HTTP header name: ${name}.` });
+        if (forbiddenHeaders.has(name.toLowerCase()))
+          context.addIssue({ code: 'custom', message: `HTTP header ${name} is not allowed.` });
+      }
+      if (
+        config.retry_non_idempotent &&
+        config.method !== 'GET' &&
+        !config.idempotency_key_header
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Non-idempotent retries require idempotency_key_header.',
+        });
+      }
+      if (config.method === 'GET' && config.body !== undefined) {
+        context.addIssue({ code: 'custom', message: 'GET requests cannot include a body.' });
+      }
+    }),
+});
 export const workflowNodeSchema = z.discriminatedUnion('type', [
   inputNodeSchema,
   promptNodeSchema,
   llmNodeSchema,
   humanApprovalNodeSchema,
+  conditionNodeSchema,
+  transformNodeSchema,
+  httpRequestNodeSchema,
   outputNodeSchema,
 ]);
-export const workflowEdgeSchema = z.object({
-  id: z.string().min(1),
-  source: z.string().min(1),
-  target: z.string().min(1),
-});
+export const workflowEdgeSchema = z
+  .object({
+    id: z.string().min(1),
+    source: z.string().min(1),
+    target: z.string().min(1),
+    branch: z.enum(['true', 'false']).optional(),
+  })
+  .strict();
 export const workflowGraphSchema = z.object({
   nodes: z.array(workflowNodeSchema),
   edges: z.array(workflowEdgeSchema),

@@ -1,8 +1,10 @@
-import type { GenerateResponse, WorkflowNode } from '@agentops/contracts';
+import type { GenerateResponse, WorkflowGraph, WorkflowNode } from '@agentops/contracts';
 import type { AiServiceClient } from './ai-client.js';
 import { TransientAiError } from './ai-client.js';
 import { renderPrompt, validateWorkflowGraph } from './graph.js';
 import type { RunRecord, Store, WorkflowVersionRecord } from './store.js';
+import { executeHttpRequest, HttpToolBlockedError, HttpToolTransientError } from './http-tool.js';
+import { evaluateCondition, renderStructuredValue } from './tool-values.js';
 
 export interface RunLogger {
   info(data: Record<string, unknown>, message: string): void;
@@ -17,6 +19,7 @@ export class RunExecutor {
     private readonly aiClient: AiServiceClient,
     private readonly logger: RunLogger,
     private readonly workflowTimeoutMs = 120_000,
+    private readonly toolSecrets: Record<string, Record<string, string>> = {},
   ) {}
 
   public async execute(run: RunRecord, version: WorkflowVersionRecord): Promise<ExecutionOutcome> {
@@ -67,7 +70,10 @@ export class RunExecutor {
     let active: { id: string; node: WorkflowNode } | null = null;
 
     try {
-      for (const nodeId of validation.executionOrder) {
+      let nodeId: string | undefined = version.graph.nodes.find(
+        (node) => node.type === 'INPUT',
+      )?.id;
+      while (nodeId) {
         if (Date.now() - started > this.workflowTimeoutMs) {
           await this.store.addTrace({
             runId: run.id,
@@ -94,6 +100,7 @@ export class RunExecutor {
         let nodeRun = await this.store.getNodeRun(run.id, node.id);
         if (nodeRun?.status === 'COMPLETED' && nodeRun.output) {
           value = nodeRun.output;
+          nodeId = await this.nextNode(version.graph, node, value, run.id);
           continue;
         }
 
@@ -115,6 +122,7 @@ export class RunExecutor {
               eventType: 'NODE_COMPLETED',
               metadata: { node_id: node.id, node_type: node.type },
             });
+            nodeId = await this.nextNode(version.graph, node, value, run.id);
             continue;
           }
         }
@@ -178,6 +186,7 @@ export class RunExecutor {
         });
         this.logger.info({ ...context, node_id: node.id }, 'worker.node_completed');
         active = null;
+        nodeId = await this.nextNode(version.graph, node, value, run.id);
       }
       await this.store.updateRun(run.id, {
         status: 'COMPLETED',
@@ -288,9 +297,158 @@ export class RunExecutor {
           output_tokens: response.output_tokens,
         };
       }
+      case 'CONDITION': {
+        const result = evaluateCondition(
+          input,
+          node.config.path,
+          node.config.operator,
+          node.config.value,
+        );
+        await this.store.addTrace({
+          runId,
+          nodeRunId,
+          eventType: 'CONDITION_EVALUATED',
+          metadata: {
+            node_id: node.id,
+            path: node.config.path,
+            operator: node.config.operator,
+            condition_result: result,
+          },
+        });
+        return { ...input, condition_result: result };
+      }
+      case 'TRANSFORM': {
+        const output = renderStructuredValue(node.config.output, input);
+        if (!output || typeof output !== 'object' || Array.isArray(output))
+          throw new Error('TRANSFORM output must be an object.');
+        await this.store.addTrace({
+          runId,
+          nodeRunId,
+          eventType: 'TRANSFORM_COMPLETED',
+          metadata: { node_id: node.id, output_fields: Object.keys(output) },
+        });
+        return output as Record<string, unknown>;
+      }
+      case 'HTTP_REQUEST': {
+        await this.store.addTrace({
+          runId,
+          nodeRunId,
+          eventType: 'HTTP_REQUEST_STARTED',
+          metadata: {
+            node_id: node.id,
+            method: node.config.method,
+            host: new URL(node.config.url).host,
+          },
+        });
+        try {
+          const output = await executeHttpRequest(node, {
+            projectId,
+            runId,
+            nodeId: node.id,
+            input,
+            secrets: this.toolSecrets,
+          });
+          await this.store.addTrace({
+            runId,
+            nodeRunId,
+            eventType: 'HTTP_REQUEST_COMPLETED',
+            metadata: {
+              node_id: node.id,
+              method: node.config.method,
+              host: new URL(node.config.url).host,
+              status: output.status,
+              latency_ms: output.latency_ms,
+            },
+          });
+          return output;
+        } catch (error) {
+          const blocked = error instanceof HttpToolBlockedError;
+          await this.store.addTrace({
+            runId,
+            nodeRunId,
+            eventType: blocked ? 'HTTP_REQUEST_BLOCKED' : 'HTTP_REQUEST_FAILED',
+            metadata: {
+              node_id: node.id,
+              method: node.config.method,
+              host: new URL(node.config.url).host,
+              reason: error instanceof Error ? error.message : 'HTTP request failed.',
+            },
+          });
+          if (error instanceof HttpToolTransientError)
+            throw new TransientExecutionError(error.message);
+          throw error;
+        }
+      }
       case 'OUTPUT':
         if (typeof input.text !== 'string') throw new Error('OUTPUT requires model text.');
         return { text: input.text };
+    }
+  }
+
+  private async nextNode(
+    graph: WorkflowGraph,
+    node: WorkflowNode,
+    value: Record<string, unknown>,
+    runId: string,
+  ): Promise<string | undefined> {
+    const outgoing = graph.edges.filter((edge) => edge.source === node.id);
+    if (node.type !== 'CONDITION') return outgoing[0]?.target;
+    const selectedBranch = value.condition_result === true ? 'true' : 'false';
+    const selected = outgoing.find((edge) => edge.branch === selectedBranch);
+    const rejected = outgoing.find((edge) => edge.branch !== selectedBranch);
+    if (!selected || !rejected) throw new Error('CONDITION branch topology is invalid.');
+    await this.store.addTrace({
+      runId,
+      nodeRunId: null,
+      eventType: 'BRANCH_SELECTED',
+      metadata: { condition_node_id: node.id, selected_branch: selectedBranch },
+    });
+    await this.skipBranch(graph, rejected.target, runId, node.id, selectedBranch);
+    return selected.target;
+  }
+
+  private async skipBranch(
+    graph: WorkflowGraph,
+    startId: string,
+    runId: string,
+    conditionNodeId: string,
+    selectedBranch: 'true' | 'false',
+  ): Promise<void> {
+    const pending = [startId];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const nodeId = pending.shift();
+      if (!nodeId || visited.has(nodeId)) continue;
+      visited.add(nodeId);
+      const node = graph.nodes.find((item) => item.id === nodeId);
+      if (!node) continue;
+      const nodeRun = await this.store.createNodeRun({
+        runId,
+        nodeId: node.id,
+        nodeType: node.type,
+      });
+      if (!['COMPLETED', 'SKIPPED'].includes(nodeRun.status)) {
+        await this.store.updateNodeRun(nodeRun.id, {
+          status: 'SKIPPED',
+          errorCode: 'CONDITION_BRANCH_NOT_SELECTED',
+          errorMessage: `Branch ${selectedBranch === 'true' ? 'false' : 'true'} was not selected.`,
+          completedAt: new Date().toISOString(),
+        });
+        await this.store.addTrace({
+          runId,
+          nodeRunId: nodeRun.id,
+          eventType: 'NODE_SKIPPED',
+          metadata: {
+            node_id: node.id,
+            reason: 'CONDITION_BRANCH_NOT_SELECTED',
+            condition_node_id: conditionNodeId,
+            selected_branch: selectedBranch,
+          },
+        });
+      }
+      pending.push(
+        ...graph.edges.filter((edge) => edge.source === nodeId).map((edge) => edge.target),
+      );
     }
   }
   private async failRun(

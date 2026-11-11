@@ -44,6 +44,7 @@ services:
       AI_SERVICE_URL: http://ai-service:8000
       DATABASE_URL: postgresql://${POSTGRES_USER:-agentops}:${POSTGRES_PASSWORD:-agentops}@postgres:5432/${POSTGRES_DB:-agentops}
       REDIS_URL: redis://redis:6379/0
+      TOOL_SECRETS_JSON: ${TOOL_SECRETS_JSON:-}
     depends_on:
       api:
         condition: service_healthy

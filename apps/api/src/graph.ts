@@ -1,4 +1,5 @@
 import { workflowGraphSchema, type WorkflowGraph, type WorkflowNode } from '@agentops/contracts';
+import { validateStructuredTemplates } from './tool-values.js';
 
 export interface GraphValidationResult {
   valid: boolean;
@@ -57,7 +58,7 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
   if (nodeIds.size !== graph.nodes.length) errors.push('Node IDs must be unique.');
   if (countType(graph.nodes, 'INPUT') !== 1) errors.push('Exactly one INPUT node is required.');
-  if (countType(graph.nodes, 'OUTPUT') !== 1) errors.push('Exactly one OUTPUT node is required.');
+  if (countType(graph.nodes, 'OUTPUT') < 1) errors.push('At least one OUTPUT node is required.');
   if (countType(graph.nodes, 'PROMPT') < 1) errors.push('At least one PROMPT node is required.');
   if (countType(graph.nodes, 'LLM') !== 1) errors.push('Exactly one LLM node is required.');
 
@@ -65,6 +66,13 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
     if (node.type === 'PROMPT' && 'template' in node.config) {
       errors.push(...validatePromptTemplate(node.config.template).errors);
     }
+    if (
+      node.type === 'CONDITION' &&
+      !['EXISTS', 'NOT_EXISTS'].includes(node.config.operator) &&
+      node.config.value === undefined
+    )
+      errors.push(`CONDITION node ${node.id} requires a comparison value.`);
+    if (node.type === 'TRANSFORM') errors.push(...validateStructuredTemplates(node.config.output));
   }
 
   const edgeKeys = new Set<string>();
@@ -74,7 +82,7 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
     }
     if (edge.source === edge.target)
       errors.push(`Edge ${edge.id} cannot connect a node to itself.`);
-    const key = `${edge.source}->${edge.target}`;
+    const key = `${edge.source}->${edge.target}:${edge.branch ?? ''}`;
     if (edgeKeys.has(key)) errors.push(`Duplicate edge ${key} is not allowed.`);
     edgeKeys.add(key);
   }
@@ -82,14 +90,13 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
   if (errors.length > 0) return { valid: false, errors: [...new Set(errors)], executionOrder: [] };
 
   const indegree = new Map(graph.nodes.map((node) => [node.id, 0]));
-  const outgoing = new Map(graph.nodes.map((node) => [node.id, [] as string[]]));
+  const outgoing = new Map(graph.nodes.map((node) => [node.id, [] as WorkflowGraph['edges']]));
   for (const edge of graph.edges) {
     indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
-    outgoing.get(edge.source)?.push(edge.target);
+    outgoing.get(edge.source)?.push(edge);
   }
 
   const inputNode = graph.nodes.find((node) => node.type === 'INPUT');
-  const outputNode = graph.nodes.find((node) => node.type === 'OUTPUT');
   for (const node of graph.nodes) {
     const inputCount = indegree.get(node.id) ?? 0;
     const outputCount = outgoing.get(node.id)?.length ?? 0;
@@ -99,8 +106,23 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
       errors.push(`${node.type} node ${node.id} must have exactly one incoming edge.`);
     if (node.type === 'OUTPUT' && outputCount !== 0)
       errors.push('OUTPUT must not have an outgoing edge.');
-    if (node.type !== 'OUTPUT' && outputCount !== 1)
+    if (node.type === 'CONDITION') {
+      const branches = (outgoing.get(node.id) ?? []).map((edge) => edge.branch);
+      if (branches.filter((branch) => branch === 'true').length !== 1)
+        errors.push(`CONDITION node ${node.id} must have exactly one TRUE branch.`);
+      if (branches.filter((branch) => branch === 'false').length !== 1)
+        errors.push(`CONDITION node ${node.id} must have exactly one FALSE branch.`);
+      if (outputCount !== 2)
+        errors.push(`CONDITION node ${node.id} must have exactly two outgoing edges.`);
+    } else if (node.type !== 'OUTPUT' && outputCount !== 1) {
       errors.push(`${node.type} node ${node.id} must have exactly one outgoing edge.`);
+    }
+    for (const edge of outgoing.get(node.id) ?? []) {
+      if (node.type !== 'CONDITION' && edge.branch !== undefined)
+        errors.push(`Only CONDITION edges may define branch metadata (${edge.id}).`);
+      if (node.type === 'CONDITION' && edge.branch === undefined)
+        errors.push(`CONDITION edge ${edge.id} requires branch metadata.`);
+    }
   }
 
   const queue = [...indegree.entries()]
@@ -112,7 +134,7 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
     const id = queue.shift();
     if (!id) break;
     order.push(id);
-    for (const target of [...(outgoing.get(id) ?? [])].sort()) {
+    for (const target of [...(outgoing.get(id) ?? [])].map((edge) => edge.target).sort()) {
       const next = (indegree.get(target) ?? 0) - 1;
       indegree.set(target, next);
       if (next === 0) queue.push(target);
@@ -121,24 +143,24 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
   }
 
   if (order.length !== graph.nodes.length) errors.push('Workflow contains a cycle.');
-  if (inputNode && outputNode) {
+  if (inputNode) {
     const visited = new Set<string>();
     const stack = [inputNode.id];
     while (stack.length > 0) {
       const id = stack.pop();
       if (!id || visited.has(id)) continue;
       visited.add(id);
-      stack.push(...(outgoing.get(id) ?? []));
+      stack.push(...(outgoing.get(id) ?? []).map((edge) => edge.target));
     }
-    if (!visited.has(outputNode.id)) errors.push('OUTPUT is not reachable from INPUT.');
     if (visited.size !== graph.nodes.length)
-      errors.push('Workflow must be one connected execution path.');
+      errors.push('Every workflow node must be reachable from INPUT.');
+    if (![...visited].some((id) => graph.nodes.find((node) => node.id === id)?.type === 'OUTPUT'))
+      errors.push('At least one OUTPUT must be reachable from INPUT.');
   }
 
   const types = order.map((id) => graph.nodes.find((node) => node.id === id)?.type);
-  if (errors.length === 0 && (types[0] !== 'INPUT' || types.at(-1) !== 'OUTPUT')) {
-    errors.push('Execution order must start with INPUT and end with OUTPUT.');
-  }
+  if (errors.length === 0 && types[0] !== 'INPUT')
+    errors.push('Execution order must start with INPUT.');
   return {
     valid: errors.length === 0,
     errors: [...new Set(errors)],

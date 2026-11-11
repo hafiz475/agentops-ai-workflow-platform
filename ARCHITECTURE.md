@@ -1,6 +1,6 @@
 # AgentOps Studio Architecture
 
-## Milestone 3 system
+## Milestone 4 system
 
 ```mermaid
 flowchart TB
@@ -11,6 +11,7 @@ flowchart TB
   Worker --> Store
   Worker --> Python[FastAPI execution plane]
   Worker --> Redis
+  Worker --> SafeHTTP[Validated public HTTP destinations]
   Python --> Dev[Deterministic provider]
   Python --> OA[OpenAI adapter]
 ```
@@ -23,11 +24,19 @@ The API validates project-scoped resources, persists commands, enqueues minimal 
 
 The worker consumes run and evaluation queues, reloads parent relationships from PostgreSQL, runs the shared `RunExecutor`, checkpoints NodeRuns/traces, calls Python only for LLM nodes, and schedules retries/resumes. Python remains provider-only.
 
+## Branching and deterministic tools
+
+The graph is an acyclic, single-parent DAG. INPUT remains unique; multiple OUTPUT terminals are allowed. CONDITION has exactly one `true` and one `false` edge. Other edges cannot carry branch metadata. Complex joins are rejected in M4. At runtime the executor follows only the selected edge and persists `SKIPPED` NodeRuns for every node in the rejected subtree.
+
+CONDITION reads a dot path and applies an allowlisted operator. TRANSFORM recursively builds JSON-compatible output using constants and controlled placeholders. Neither accepts executable code. HTTP_REQUEST is a worker-only capability: it accepts a strictly typed configuration, resolves and validates DNS, blocks loopback/link-local/private/metadata/internal targets, permits only HTTP(S), manually validates up to three same-origin redirects, uses a 10-second default/30-second maximum timeout, and streams at most 1 MiB by default/5 MiB maximum.
+
+Workflow graphs contain secret reference names only. `TOOL_SECRETS_JSON` maps project IDs and reference names to values inside the worker environment. Authorization, cookies, API keys, and Set-Cookie are never persisted in normalized responses or traces.
+
 ## Durable lifecycle
 
 A run transitions `QUEUED -> RUNNING -> COMPLETED|FAILED|CANCELLED`, or `RUNNING -> WAITING_FOR_APPROVAL -> QUEUED -> RUNNING`. NodeRuns support `PENDING`, `RUNNING`, `WAITING`, `COMPLETED`, `FAILED`, `SKIPPED`, and `CANCELLED`.
 
-BullMQ uses three attempts with 1-second exponential backoff. Only transport, timeout, HTTP 429, and provider/server 5xx failures are transient. Invalid graphs/configuration and human rejection are permanent. Provider calls time out after 30 seconds; execution checks a 120-second deadline between nodes. Queue locks are renewed and stalled jobs may be recovered twice.
+BullMQ uses three attempts with 1-second exponential backoff. Only transport, timeout, HTTP 429, and provider/server 5xx failures are transient. External HTTP GET can retry; POST/PUT/PATCH require an explicit retry flag and deterministic idempotency-key header. Invalid graphs/configuration, SSRF blocks, and human rejection are permanent. Provider calls time out after 30 seconds; execution checks a 120-second deadline between nodes. Queue locks are renewed and stalled jobs may be recovered twice.
 
 `(run_id,node_id)` is unique. On duplicate delivery the executor uses completed NodeRun output as the next value instead of rerunning the node. Worker startup re-enqueues `QUEUED`/`RUNNING` runs with deterministic recovery identities. BullMQ also recovers stalled active jobs. The ambiguous provider-response crash window is documented rather than falsely claiming exactly-once external calls.
 
@@ -49,4 +58,4 @@ Compose exposes only web `3000` and API `3001`. Worker, AI `8000`, PostgreSQL `5
 
 ## Explicitly out of scope
 
-Conditions, transforms, HTTP requests/tools, branching DAGs, retrieval/RAG, agent loops, and production authentication/hardening.
+Retrieval/RAG, embeddings, agent/tool selection, loops, complex joins, and production authentication/hardening.

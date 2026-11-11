@@ -5,6 +5,7 @@ const configSchema = z.object({
   AI_SERVICE_URL: z.string().url().default('http://localhost:8000'),
   DATABASE_URL: z.string().min(1).default('postgresql://agentops:agentops@localhost:5432/agentops'),
   REDIS_URL: z.string().min(1).default('redis://localhost:6379/0'),
+  TOOL_SECRETS_JSON: z.string().default(''),
 });
 
 export type Config = z.infer<typeof configSchema>;

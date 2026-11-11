@@ -13,6 +13,7 @@ import {
   queueConnection,
 } from './queue.js';
 import { PostgresStore } from './store.js';
+import { parseToolSecrets } from './http-tool.js';
 
 const config = loadConfig();
 const pool = new Pool({ connectionString: config.DATABASE_URL });
@@ -20,10 +21,16 @@ const store = new PostgresStore(pool);
 const producer = new BullDurableQueue(config.REDIS_URL);
 const log = (level: 'info' | 'error', data: Record<string, unknown>, message: string) =>
   console[level](JSON.stringify({ level, message, ...data, timestamp: new Date().toISOString() }));
-const executor = new RunExecutor(store, new HttpAiServiceClient(config.AI_SERVICE_URL), {
-  info: (data, message) => log('info', data, message),
-  error: (data, message) => log('error', data, message),
-});
+const executor = new RunExecutor(
+  store,
+  new HttpAiServiceClient(config.AI_SERVICE_URL),
+  {
+    info: (data, message) => log('info', data, message),
+    error: (data, message) => log('error', data, message),
+  },
+  120_000,
+  parseToolSecrets(config.TOOL_SECRETS_JSON),
+);
 
 const worker = new Worker<RunJobData>(
   RUN_QUEUE_NAME,

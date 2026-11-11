@@ -1,4 +1,12 @@
-export type NodeType = 'INPUT' | 'PROMPT' | 'LLM' | 'HUMAN_APPROVAL' | 'OUTPUT';
+export type NodeType =
+  | 'INPUT'
+  | 'PROMPT'
+  | 'LLM'
+  | 'HUMAN_APPROVAL'
+  | 'CONDITION'
+  | 'TRANSFORM'
+  | 'HTTP_REQUEST'
+  | 'OUTPUT';
 export interface GraphNode {
   id: string;
   type: NodeType;
@@ -10,6 +18,7 @@ export interface GraphEdge {
   id: string;
   source: string;
   target: string;
+  branch?: 'true' | 'false';
 }
 export interface WorkflowGraph {
   nodes: GraphNode[];
