@@ -1216,7 +1216,7 @@ export class PostgresStore implements Store {
         input.nodeRunId,
         input.retrievedChunkIds,
         input.citedChunkIds,
-        input.sourceMetadata,
+        JSON.stringify(input.sourceMetadata),
       ],
     );
     return citationValidationFromRow(rows[0] as Record<string, unknown>);

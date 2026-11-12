@@ -16,6 +16,7 @@ import {
 import { validateKnowledgeSourceReferences } from '../src/knowledge-routes.js';
 import type { DurableQueue } from '../src/queue.js';
 import { validateCitations } from '../src/retrieval.js';
+import { PostgresStore } from '../src/store.js';
 import { MemoryStore } from './memory-store.js';
 
 const logger = { info() {}, error() {} };
@@ -350,6 +351,40 @@ describe('Milestone 5 knowledge API and project isolation', () => {
 });
 
 describe('Milestone 5 retrieval, RAG, and citations', () => {
+  it('serializes citation source metadata as JSONB rather than a PostgreSQL array', async () => {
+    const runId = randomUUID();
+    const nodeRunId = randomUUID();
+    const chunkId = randomUUID();
+    let parameters: unknown[] = [];
+    const store = new PostgresStore({
+      query: async (_query: string, values: unknown[]) => {
+        parameters = values;
+        return {
+          rows: [
+            {
+              id: randomUUID(),
+              run_id: runId,
+              node_run_id: nodeRunId,
+              retrieved_chunk_ids: [chunkId],
+              cited_chunk_ids: [chunkId],
+              source_metadata: [{ chunk_id: chunkId }],
+              created_at: new Date().toISOString(),
+            },
+          ],
+        };
+      },
+    } as never);
+    const sourceMetadata = [{ chunk_id: chunkId, filename: 'inspection.txt' }];
+    await store.createCitationValidation({
+      runId,
+      nodeRunId,
+      retrievedChunkIds: [chunkId],
+      citedChunkIds: [chunkId],
+      sourceMetadata,
+    });
+    assert.equal(parameters[4], JSON.stringify(sourceMetadata));
+  });
+
   it('executes INPUT -> RETRIEVAL -> PROMPT -> LLM -> OUTPUT with provenance', async () => {
     const store = new MemoryStore();
     const fixture = await createReadySource(store);
