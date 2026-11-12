@@ -111,7 +111,10 @@ export const registerMilestone2Routes = async (
     const body = promptVersionBody.safeParse(request.body);
     if (!params.success) return reply.code(400).send(validationError(params.error));
     if (!body.success) return reply.code(400).send(validationError(body.error));
-    const templateValidation = validatePromptTemplate(body.data.template);
+    const templateValidation = validatePromptTemplate(body.data.template, [
+      'input',
+      'retrieval_context',
+    ]);
     if (!templateValidation.valid)
       return reply
         .code(422)

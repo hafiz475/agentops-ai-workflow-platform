@@ -96,7 +96,25 @@ export function EvaluationsPage({ projectId }: EvaluationsPageProps) {
         };
       else if (evaluatorType === 'REGEX')
         config = { type: 'REGEX', pattern: evaluatorValue, flags: 'i' };
-      else config = { type: 'JSON_SCHEMA', schema: parseJsonObject(evaluatorValue) };
+      else if (evaluatorType === 'JSON_SCHEMA')
+        config = { type: 'JSON_SCHEMA', schema: parseJsonObject(evaluatorValue) };
+      else if (evaluatorType === 'RETRIEVAL_HIT_AT_K')
+        config = { type: 'RETRIEVAL_HIT_AT_K', k: Number(evaluatorValue) };
+      else if (evaluatorType === 'RETRIEVAL_RECALL_AT_K')
+        config = { type: 'RETRIEVAL_RECALL_AT_K', k: Number(evaluatorValue) };
+      else if (evaluatorType === 'RETRIEVAL_MRR') config = { type: 'RETRIEVAL_MRR' };
+      else {
+        const citation = parseJsonObject(evaluatorValue);
+        config = {
+          type: 'CITATION_MATCH',
+          required_chunk_ids: Array.isArray(citation.required_chunk_ids)
+            ? citation.required_chunk_ids.map(String)
+            : [],
+          forbidden_chunk_ids: Array.isArray(citation.forbidden_chunk_ids)
+            ? citation.forbidden_chunk_ids.map(String)
+            : [],
+        };
+      }
       return api.addEvaluationCase(
         projectId,
         datasetId,
@@ -189,12 +207,22 @@ export function EvaluationsPage({ projectId }: EvaluationsPageProps) {
                   setEvaluatorType(event.target.value as EvaluatorConfig['type'])
                 }
               >
-                {['EXACT_MATCH', 'CONTAINS', 'NOT_CONTAINS', 'REGEX', 'JSON_SCHEMA'].map((type) => (
+                {[
+                  'EXACT_MATCH',
+                  'CONTAINS',
+                  'NOT_CONTAINS',
+                  'REGEX',
+                  'JSON_SCHEMA',
+                  'RETRIEVAL_HIT_AT_K',
+                  'RETRIEVAL_RECALL_AT_K',
+                  'RETRIEVAL_MRR',
+                  'CITATION_MATCH',
+                ].map((type) => (
                   <option key={type}>{type}</option>
                 ))}
               </select>
             </label>
-            {evaluatorType !== 'EXACT_MATCH' && (
+            {!['EXACT_MATCH', 'RETRIEVAL_MRR'].includes(evaluatorType) && (
               <label>
                 Evaluator configuration
                 <textarea

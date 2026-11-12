@@ -36,6 +36,8 @@ jobs:
         run: npx tsx --test apps/api/test/milestone3.test.ts
       - name: Test API branching and safe HTTP tools
         run: npx tsx --test apps/api/test/milestone4.test.ts
+      - name: Test API knowledge ingestion, retrieval, RAG, and citations
+        run: npx tsx --test apps/api/test/milestone5.test.ts
       - name: Test dashboard
         run: npm test --workspace=@agentops/web
       - run: npm run build

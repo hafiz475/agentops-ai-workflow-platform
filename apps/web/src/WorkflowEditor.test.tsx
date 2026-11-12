@@ -81,4 +81,27 @@ describe('workflow editor state', () => {
     assert.equal(pollingIntervalForStatus('COMPLETED'), false);
     assert.equal(pollingIntervalForStatus('FAILED'), false);
   });
+
+  it('adds RETRIEVAL nodes and summarizes ranked retrieval and citations', () => {
+    const retrieval = createWorkflowNode('RETRIEVAL', 0, 'retrieval');
+    assert.deepEqual(retrieval.data.config, {
+      knowledge_source_id: '',
+      query_path: 'input',
+      top_k: 5,
+    });
+    assert.match(
+      traceSummary({
+        eventType: 'RETRIEVAL_COMPLETED',
+        metadata: { result_count: 3, latency_ms: 12 },
+      }),
+      /3 ranked sources.*12 ms/,
+    );
+    assert.match(
+      traceSummary({
+        eventType: 'CITATIONS_VALIDATED',
+        metadata: { cited_chunk_ids: ['chunk'] },
+      }),
+      /1 citations validated/,
+    );
+  });
 });

@@ -36,6 +36,7 @@ const nodeLabels: Record<NodeType, string> = {
   CONDITION: 'Deterministic branch',
   TRANSFORM: 'Structured transform',
   HTTP_REQUEST: 'Safe HTTP request',
+  RETRIEVAL: 'Ranked knowledge retrieval',
   OUTPUT: 'Final output',
 };
 
@@ -87,7 +88,9 @@ export const createWorkflowNode = (
                     max_response_bytes: 1048576,
                     retry_non_idempotent: false,
                   }
-                : {};
+                : nodeType === 'RETRIEVAL'
+                  ? { knowledge_source_id: '', query_path: 'input', top_k: 5 }
+                  : {};
   return {
     id,
     type: 'workflow',
@@ -115,6 +118,13 @@ export const traceSummary = (event: { eventType: string; metadata: Record<string
     ]
       .filter(Boolean)
       .join(' · ');
+  if (event.eventType === 'RETRIEVAL_STARTED')
+    return `query length ${String(event.metadata.query_length)} / top ${String(event.metadata.top_k)}`;
+  if (event.eventType === 'RETRIEVAL_COMPLETED')
+    return `${String(event.metadata.result_count)} ranked sources / ${String(event.metadata.latency_ms)} ms`;
+  if (event.eventType === 'RETRIEVAL_FAILED') return String(event.metadata.reason ?? 'failed');
+  if (event.eventType === 'CITATIONS_VALIDATED')
+    return `${Array.isArray(event.metadata.cited_chunk_ids) ? event.metadata.cited_chunk_ids.length : 0} citations validated`;
   return event.metadata.prompt ? String(event.metadata.prompt) : '';
 };
 export const parseConditionValue = (value: string): string | number | boolean | null => {
@@ -185,6 +195,10 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
   const prompts = useQuery({
     queryKey: ['prompts', projectId],
     queryFn: () => api.listPrompts(projectId),
+  });
+  const knowledgeSources = useQuery({
+    queryKey: ['knowledge-sources', projectId],
+    queryFn: () => api.listKnowledgeSources(projectId),
   });
   const promptVersions =
     prompts.data?.flatMap((prompt) =>
@@ -270,6 +284,14 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
       node.data.config = { prompt_version_id: preferredPromptVersion.id };
       node.data.label = `${preferredPromptVersion.promptName} v${preferredPromptVersion.versionNumber}`;
     }
+    if (nodeType === 'RETRIEVAL' && knowledgeSources.data?.[0]) {
+      node.data.config = {
+        knowledge_source_id: knowledgeSources.data[0].id,
+        query_path: 'input',
+        top_k: 5,
+      };
+      node.data.label = knowledgeSources.data[0].name;
+    }
     setNodes((current) => [...current, node]);
     setSelectedId(node.id);
   };
@@ -335,6 +357,7 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
               'CONDITION',
               'TRANSFORM',
               'HTTP_REQUEST',
+              'RETRIEVAL',
               'OUTPUT',
             ] as NodeType[]
           ).map((type) => (
@@ -636,6 +659,51 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
               </p>
             </>
           )}{' '}
+          {selected?.data.nodeType === 'RETRIEVAL' && (
+            <>
+              <label>
+                Knowledge Source
+                <select
+                  aria-label="Retrieval knowledge source"
+                  value={String(
+                    (selected.data.config as Record<string, unknown>).knowledge_source_id ?? '',
+                  )}
+                  onChange={(event) => updateConfig('knowledge_source_id', event.target.value)}
+                >
+                  <option value="">Select a source</option>
+                  {knowledgeSources.data?.map((source) => (
+                    <option key={source.id} value={source.id}>
+                      {source.name} / {source.embeddingModel}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Query path
+                <input
+                  aria-label="Retrieval query path"
+                  value={String(
+                    (selected.data.config as Record<string, unknown>).query_path ?? 'input',
+                  )}
+                  onChange={(event) => updateConfig('query_path', event.target.value)}
+                />
+              </label>
+              <label>
+                Top K
+                <input
+                  aria-label="Retrieval top K"
+                  type="number"
+                  min="1"
+                  max="20"
+                  value={Number((selected.data.config as Record<string, unknown>).top_k ?? 5)}
+                  onChange={(event) => updateConfig('top_k', Number(event.target.value))}
+                />
+              </label>
+              <p className="security-warning">
+                Retrieved text is untrusted data and is isolated in controlled source context.
+              </p>
+            </>
+          )}{' '}
           <div className="action-stack">
             <button disabled={readOnlyVersion !== null} onClick={() => save.mutate()}>
               Save draft
@@ -730,6 +798,34 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
                 {String(currentRun.output.text ?? JSON.stringify(currentRun.output, null, 2))}
               </pre>
             )}
+            {Array.isArray(currentRun.output?.retrieval_results) && (
+              <div className="retrieval-results">
+                <h3>Ranked sources</h3>
+                {(currentRun.output.retrieval_results as Array<Record<string, unknown>>).map(
+                  (result) => (
+                    <article key={String(result.chunk_id)}>
+                      <strong>
+                        Source {String(result.rank)} /{' '}
+                        {String((result.source as Record<string, unknown>)?.filename ?? 'document')}
+                      </strong>
+                      <small>
+                        Page {String(result.page_number ?? 'N/A')} / cosine similarity{' '}
+                        {Number(result.score ?? 0).toFixed(3)} / chunk {String(result.chunk_id)}
+                      </small>
+                      <p>{String(result.content ?? '').slice(0, 280)}</p>
+                    </article>
+                  ),
+                )}
+              </div>
+            )}
+            {Array.isArray(currentRun.output?.citations) &&
+              currentRun.output.citations.length > 0 && (
+                <p className="validation-message">
+                  <strong>Validated citations</strong>
+                  <br />
+                  {currentRun.output.citations.map(String).join(', ')}
+                </p>
+              )}
             {currentRun.status === 'WAITING_FOR_APPROVAL' && (
               <p className="validation-message">
                 <strong>WAITING FOR APPROVAL</strong>

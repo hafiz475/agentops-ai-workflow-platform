@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     provider: Literal["development", "openai"] = "development"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
+    openai_embedding_model: str = "text-embedding-3-small"
 
 
 settings = Settings()

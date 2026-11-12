@@ -1,6 +1,6 @@
 # AgentOps Studio Architecture
 
-## Milestone 4 system
+## Milestone 5 system
 
 ```mermaid
 flowchart TB
@@ -10,6 +10,7 @@ flowchart TB
   Redis --> Worker[Dedicated Node worker]
   Worker --> Store
   Worker --> Python[FastAPI execution plane]
+  Worker --> Vector[(PostgreSQL + pgvector)]
   Worker --> Redis
   Worker --> SafeHTTP[Validated public HTTP destinations]
   Python --> Dev[Deterministic provider]
@@ -22,7 +23,21 @@ The web client edits/version workflows and prompts, launches runs/evaluations, p
 
 The API validates project-scoped resources, persists commands, enqueues minimal identifiers, and returns. In production it does not own a long-running execution promise. PostgreSQL is authoritative; Redis contains delivery state, not workflow graphs or secrets.
 
-The worker consumes run and evaluation queues, reloads parent relationships from PostgreSQL, runs the shared `RunExecutor`, checkpoints NodeRuns/traces, calls Python only for LLM nodes, and schedules retries/resumes. Python remains provider-only.
+The worker consumes run, evaluation, and knowledge-ingestion queues, reloads authoritative state from PostgreSQL, runs the shared `RunExecutor`, checkpoints NodeRuns/traces, and schedules retries/resumes. Python remains provider-only for generation and embeddings.
+
+## Knowledge ingestion and vector storage
+
+KnowledgeSource, KnowledgeDocument, KnowledgeChunk, and KnowledgeChunkEmbedding are project-scoped PostgreSQL records. Documents move `UPLOADED -> PROCESSING -> READY|FAILED`. The ingestion worker extracts ordered TXT/PDF/DOCX content, chunks deterministically with overlap and page metadata, obtains provider-neutral embeddings, and atomically replaces the document's chunks and vectors. Duplicate SHA-256 uploads return the existing record, completed jobs are idempotent, and incompatible provider/model/dimension writes are rejected.
+
+Embeddings use the existing PostgreSQL service with the `vector` extension. Search uses cosine distance converted explicitly to `cosine_similarity`; it never mixes source models or crosses project/source boundaries. Vector values are not exposed by APIs or traces.
+
+## Retrieval, grounding, and citations
+
+RETRIEVAL is a normal durable workflow node, not a second executor. It reads an allowlisted dot path, verifies project ancestry, embeds with the Knowledge Source model, and returns ranked chunk provenance plus deterministic controlled context. Traces record safe query length, result count, latency, provider/model, ranks, and source identifiers without full confidential content.
+
+PROMPT accepts `retrieval_context` as an explicit variable. The renderer clearly labels retrieved text as untrusted data and separates it from workflow instructions. This reduces but cannot eliminate indirect prompt injection. LLM citations using source numbers or chunk IDs are resolved only against the retrieved set; invalid citations fail the node, while valid retrieved/cited provenance is persisted.
+
+Retrieval Hit@K, Recall@K, MRR, and citation checks run in the existing evaluation framework and reuse ordinary durable WorkflowRuns.
 
 ## Branching and deterministic tools
 
@@ -58,4 +73,4 @@ Compose exposes only web `3000` and API `3001`. Worker, AI `8000`, PostgreSQL `5
 
 ## Explicitly out of scope
 
-Retrieval/RAG, embeddings, agent/tool selection, loops, complex joins, and production authentication/hardening.
+Agent/tool selection, autonomous loops, planner/executor systems, multi-agent systems, complex joins, arbitrary code tools, billing, and production authentication/hardening.

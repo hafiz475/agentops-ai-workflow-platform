@@ -11,8 +11,9 @@ import { EvaluationsPage } from './EvaluationsPage';
 import { ApprovalsPage } from './ApprovalsPage';
 import { PromptsPage } from './PromptsPage';
 import { WorkflowEditor } from './WorkflowEditor';
+import { KnowledgeSourcesPage } from './KnowledgeSourcesPage';
 const queryClient = new QueryClient();
-type Page = 'projects' | 'workflows' | 'prompts' | 'evaluations' | 'approvals';
+type Page = 'projects' | 'workflows' | 'prompts' | 'knowledge' | 'evaluations' | 'approvals';
 function Studio() {
   const client = useQueryClient();
   const [project, setProject] = useState<Project | null>(null);
@@ -86,6 +87,13 @@ function Studio() {
           </button>{' '}
           <button
             disabled={!project}
+            className={page === 'knowledge' ? 'active' : ''}
+            onClick={() => setPage('knowledge')}
+          >
+            Knowledge Sources
+          </button>
+          <button
+            disabled={!project}
             className={page === 'approvals' ? 'active' : ''}
             onClick={() => setPage('approvals')}
           >
@@ -93,8 +101,8 @@ function Studio() {
           </button>
         </nav>
         <p>
-          Milestone 4<br />
-          <strong>Branch-safe tools online</strong>
+          Milestone 5<br />
+          <strong>Retrieval and RAG online</strong>
           {project && (
             <>
               <br />
@@ -186,6 +194,7 @@ function Studio() {
           </section>
         )}
         {project && page === 'prompts' && <PromptsPage projectId={project.id} />}{' '}
+        {project && page === 'knowledge' && <KnowledgeSourcesPage projectId={project.id} />}{' '}
         {project && page === 'evaluations' && <EvaluationsPage projectId={project.id} />}{' '}
         {project && page === 'approvals' && <ApprovalsPage projectId={project.id} />}{' '}
       </main>

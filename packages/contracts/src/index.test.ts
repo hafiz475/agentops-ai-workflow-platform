@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   evaluatorConfigSchema,
+  embeddingResponseSchema,
   generateResponseSchema,
   serviceStatusSchema,
   workflowGraphSchema,
@@ -119,5 +120,56 @@ describe('contracts', () => {
         edges: [{ id: 'bad', source: 'a', target: 'b', branch: 'maybe' }],
       }),
     );
+  });
+
+  it('validates Milestone 5 retrieval, evaluation, and embedding contracts', () => {
+    const graph = workflowGraphSchema.parse({
+      nodes: [
+        {
+          id: 'retrieval',
+          type: 'RETRIEVAL',
+          version: 1,
+          position: { x: 0, y: 0 },
+          config: {
+            knowledge_source_id: '00000000-0000-4000-8000-000000000001',
+            query_path: 'input',
+            top_k: 5,
+          },
+        },
+      ],
+      edges: [],
+    });
+    assert.equal(graph.nodes[0]?.type, 'RETRIEVAL');
+    assert.throws(() =>
+      workflowGraphSchema.parse({
+        nodes: [
+          {
+            id: 'retrieval',
+            type: 'RETRIEVAL',
+            version: 1,
+            position: { x: 0, y: 0 },
+            config: {
+              knowledge_source_id: '00000000-0000-4000-8000-000000000001',
+              query_path: 'input',
+              top_k: 21,
+            },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    assert.equal(
+      evaluatorConfigSchema.parse({ type: 'RETRIEVAL_HIT_AT_K', k: 3 }).type,
+      'RETRIEVAL_HIT_AT_K',
+    );
+    const embedding = embeddingResponseSchema.parse({
+      vectors: [[1, 0]],
+      provider: 'development',
+      model: 'development-hash-v1',
+      dimensions: 2,
+      latency_ms: 0,
+      input_tokens: null,
+    });
+    assert.equal(embedding.dimensions, 2);
   });
 });

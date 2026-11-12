@@ -92,6 +92,58 @@ export interface TraceEventRecord {
   createdAt: string;
 }
 
+export type KnowledgeDocumentStatus = 'UPLOADED' | 'PROCESSING' | 'READY' | 'FAILED';
+export interface KnowledgeSourceRecord {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  sourceType: 'DOCUMENTS';
+  embeddingProvider: 'development' | 'openai';
+  embeddingModel: string;
+  embeddingDimensions: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface KnowledgeDocumentRecord {
+  id: string;
+  knowledgeSourceId: string;
+  projectId: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSize: number;
+  sha256Hash: string;
+  status: KnowledgeDocumentStatus;
+  errorMessage: string | null;
+  rawContent: Buffer;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface KnowledgeChunkRecord {
+  id: string;
+  knowledgeSourceId: string;
+  knowledgeDocumentId: string;
+  projectId: string;
+  chunkIndex: number;
+  pageNumber: number | null;
+  content: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+export interface RetrievalResultRecord extends KnowledgeChunkRecord {
+  filename: string;
+  similarity: number;
+}
+export interface CitationValidationRecord {
+  id: string;
+  runId: string;
+  nodeRunId: string;
+  retrievedChunkIds: string[];
+  citedChunkIds: string[];
+  sourceMetadata: Array<Record<string, unknown>>;
+  createdAt: string;
+}
+
 export interface PromptRecord {
   id: string;
   projectId: string;
@@ -261,6 +313,73 @@ export interface Store {
     workflowId: string,
     runId: string,
   ): Promise<TraceEventRecord[] | null>;
+  createKnowledgeSource(
+    projectId: string,
+    input: {
+      name: string;
+      description: string | null;
+      embeddingProvider: 'development' | 'openai';
+      embeddingModel: string;
+    },
+  ): Promise<KnowledgeSourceRecord | null>;
+  listKnowledgeSources(projectId: string): Promise<KnowledgeSourceRecord[]>;
+  getKnowledgeSource(projectId: string, sourceId: string): Promise<KnowledgeSourceRecord | null>;
+  createKnowledgeDocument(input: {
+    projectId: string;
+    knowledgeSourceId: string;
+    originalFilename: string;
+    mimeType: string;
+    fileSize: number;
+    sha256Hash: string;
+    rawContent: Buffer;
+  }): Promise<{ document: KnowledgeDocumentRecord; created: boolean } | null>;
+  listKnowledgeDocuments(projectId: string, sourceId: string): Promise<KnowledgeDocumentRecord[]>;
+  getKnowledgeDocument(
+    projectId: string,
+    sourceId: string,
+    documentId: string,
+  ): Promise<KnowledgeDocumentRecord | null>;
+  getKnowledgeDocumentById(documentId: string): Promise<KnowledgeDocumentRecord | null>;
+  listRecoverableKnowledgeDocuments(): Promise<KnowledgeDocumentRecord[]>;
+  updateKnowledgeDocument(
+    documentId: string,
+    patch: { status: KnowledgeDocumentStatus; errorMessage?: string | null },
+  ): Promise<void>;
+  replaceDocumentChunks(input: {
+    document: KnowledgeDocumentRecord;
+    provider: string;
+    model: string;
+    dimensions: number;
+    chunks: Array<{
+      chunkIndex: number;
+      pageNumber: number | null;
+      content: string;
+      metadata: Record<string, unknown>;
+      embedding: number[];
+    }>;
+  }): Promise<void>;
+  listKnowledgeChunks(
+    projectId: string,
+    sourceId: string,
+    documentId?: string,
+  ): Promise<KnowledgeChunkRecord[]>;
+  searchKnowledgeChunks(input: {
+    projectId: string;
+    sourceId: string;
+    provider: string;
+    model: string;
+    dimensions: number;
+    queryEmbedding: number[];
+    topK: number;
+    documentId?: string;
+  }): Promise<RetrievalResultRecord[]>;
+  createCitationValidation(input: {
+    runId: string;
+    nodeRunId: string;
+    retrievedChunkIds: string[];
+    citedChunkIds: string[];
+    sourceMetadata: Array<Record<string, unknown>>;
+  }): Promise<CitationValidationRecord>;
   createPrompt(
     projectId: string,
     input: { name: string; description: string | null },
@@ -415,6 +534,59 @@ const traceFromRow = (row: Record<string, unknown>): TraceEventRecord => ({
   nodeRunId: row.node_run_id === null ? null : String(row.node_run_id),
   eventType: String(row.event_type),
   metadata: row.metadata as Record<string, unknown>,
+  createdAt: String(row.created_at),
+});
+const knowledgeSourceFromRow = (row: Record<string, unknown>): KnowledgeSourceRecord => ({
+  id: String(row.id),
+  projectId: String(row.project_id),
+  name: String(row.name),
+  description: row.description == null ? null : String(row.description),
+  sourceType: 'DOCUMENTS',
+  embeddingProvider: row.embedding_provider as 'development' | 'openai',
+  embeddingModel: String(row.embedding_model),
+  embeddingDimensions: row.embedding_dimensions == null ? null : Number(row.embedding_dimensions),
+  createdAt: String(row.created_at),
+  updatedAt: String(row.updated_at),
+});
+const knowledgeDocumentFromRow = (row: Record<string, unknown>): KnowledgeDocumentRecord => ({
+  id: String(row.id),
+  knowledgeSourceId: String(row.knowledge_source_id),
+  projectId: String(row.project_id),
+  originalFilename: String(row.original_filename),
+  mimeType: String(row.mime_type),
+  fileSize: Number(row.file_size),
+  sha256Hash: String(row.sha256_hash),
+  status: row.status as KnowledgeDocumentStatus,
+  errorMessage: row.error_message == null ? null : String(row.error_message),
+  rawContent: Buffer.isBuffer(row.raw_content)
+    ? row.raw_content
+    : Buffer.from(row.raw_content as Uint8Array),
+  createdAt: String(row.created_at),
+  updatedAt: String(row.updated_at),
+});
+const knowledgeChunkFromRow = (row: Record<string, unknown>): KnowledgeChunkRecord => ({
+  id: String(row.id),
+  knowledgeSourceId: String(row.knowledge_source_id),
+  knowledgeDocumentId: String(row.knowledge_document_id),
+  projectId: String(row.project_id),
+  chunkIndex: Number(row.chunk_index),
+  pageNumber: row.page_number == null ? null : Number(row.page_number),
+  content: String(row.content),
+  metadata: (row.metadata_json as Record<string, unknown>) ?? {},
+  createdAt: String(row.created_at),
+});
+const retrievalResultFromRow = (row: Record<string, unknown>): RetrievalResultRecord => ({
+  ...knowledgeChunkFromRow(row),
+  filename: String(row.original_filename),
+  similarity: Number(row.similarity),
+});
+const citationValidationFromRow = (row: Record<string, unknown>): CitationValidationRecord => ({
+  id: String(row.id),
+  runId: String(row.run_id),
+  nodeRunId: String(row.node_run_id),
+  retrievedChunkIds: (row.retrieved_chunk_ids as string[]) ?? [],
+  citedChunkIds: (row.cited_chunk_ids as string[]) ?? [],
+  sourceMetadata: (row.source_metadata as Array<Record<string, unknown>>) ?? [],
   createdAt: String(row.created_at),
 });
 
@@ -804,6 +976,250 @@ export class PostgresStore implements Store {
       [runId],
     );
     return rows.map((row) => traceFromRow(row as Record<string, unknown>));
+  }
+  public async createKnowledgeSource(
+    projectId: string,
+    input: {
+      name: string;
+      description: string | null;
+      embeddingProvider: 'development' | 'openai';
+      embeddingModel: string;
+    },
+  ): Promise<KnowledgeSourceRecord | null> {
+    const { rows } = await this.pool.query(
+      "INSERT INTO knowledge_sources(project_id,name,description,source_type,embedding_provider,embedding_model) SELECT id,$2,$3,'DOCUMENTS',$4,$5 FROM projects WHERE id=$1 RETURNING *",
+      [projectId, input.name, input.description, input.embeddingProvider, input.embeddingModel],
+    );
+    return rows[0] ? knowledgeSourceFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async listKnowledgeSources(projectId: string): Promise<KnowledgeSourceRecord[]> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM knowledge_sources WHERE project_id=$1 ORDER BY updated_at DESC',
+      [projectId],
+    );
+    return rows.map((row) => knowledgeSourceFromRow(row as Record<string, unknown>));
+  }
+  public async getKnowledgeSource(
+    projectId: string,
+    sourceId: string,
+  ): Promise<KnowledgeSourceRecord | null> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM knowledge_sources WHERE project_id=$1 AND id=$2',
+      [projectId, sourceId],
+    );
+    return rows[0] ? knowledgeSourceFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async createKnowledgeDocument(input: {
+    projectId: string;
+    knowledgeSourceId: string;
+    originalFilename: string;
+    mimeType: string;
+    fileSize: number;
+    sha256Hash: string;
+    rawContent: Buffer;
+  }): Promise<{ document: KnowledgeDocumentRecord; created: boolean } | null> {
+    const { rows } = await this.pool.query(
+      "INSERT INTO knowledge_documents(knowledge_source_id,project_id,original_filename,mime_type,file_size,sha256_hash,status,raw_content) SELECT s.id,s.project_id,$3,$4,$5,$6,'UPLOADED',$7 FROM knowledge_sources s WHERE s.project_id=$1 AND s.id=$2 ON CONFLICT (knowledge_source_id,sha256_hash) DO NOTHING RETURNING *",
+      [
+        input.projectId,
+        input.knowledgeSourceId,
+        input.originalFilename,
+        input.mimeType,
+        input.fileSize,
+        input.sha256Hash,
+        input.rawContent,
+      ],
+    );
+    if (rows[0])
+      return {
+        document: knowledgeDocumentFromRow(rows[0] as Record<string, unknown>),
+        created: true,
+      };
+    const existing = await this.pool.query(
+      'SELECT * FROM knowledge_documents WHERE project_id=$1 AND knowledge_source_id=$2 AND sha256_hash=$3',
+      [input.projectId, input.knowledgeSourceId, input.sha256Hash],
+    );
+    return existing.rows[0]
+      ? {
+          document: knowledgeDocumentFromRow(existing.rows[0] as Record<string, unknown>),
+          created: false,
+        }
+      : null;
+  }
+  public async listKnowledgeDocuments(
+    projectId: string,
+    sourceId: string,
+  ): Promise<KnowledgeDocumentRecord[]> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM knowledge_documents WHERE project_id=$1 AND knowledge_source_id=$2 ORDER BY created_at DESC',
+      [projectId, sourceId],
+    );
+    return rows.map((row) => knowledgeDocumentFromRow(row as Record<string, unknown>));
+  }
+  public async getKnowledgeDocument(
+    projectId: string,
+    sourceId: string,
+    documentId: string,
+  ): Promise<KnowledgeDocumentRecord | null> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM knowledge_documents WHERE project_id=$1 AND knowledge_source_id=$2 AND id=$3',
+      [projectId, sourceId, documentId],
+    );
+    return rows[0] ? knowledgeDocumentFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async getKnowledgeDocumentById(
+    documentId: string,
+  ): Promise<KnowledgeDocumentRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM knowledge_documents WHERE id=$1', [
+      documentId,
+    ]);
+    return rows[0] ? knowledgeDocumentFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async listRecoverableKnowledgeDocuments(): Promise<KnowledgeDocumentRecord[]> {
+    const { rows } = await this.pool.query(
+      "SELECT * FROM knowledge_documents WHERE status IN ('UPLOADED','PROCESSING') ORDER BY created_at",
+    );
+    return rows.map((row) => knowledgeDocumentFromRow(row as Record<string, unknown>));
+  }
+  public async updateKnowledgeDocument(
+    documentId: string,
+    patch: { status: KnowledgeDocumentStatus; errorMessage?: string | null },
+  ): Promise<void> {
+    await this.pool.query(
+      'UPDATE knowledge_documents SET status=$2,error_message=$3,updated_at=NOW() WHERE id=$1',
+      [documentId, patch.status, patch.errorMessage ?? null],
+    );
+  }
+  public async replaceDocumentChunks(input: {
+    document: KnowledgeDocumentRecord;
+    provider: string;
+    model: string;
+    dimensions: number;
+    chunks: Array<{
+      chunkIndex: number;
+      pageNumber: number | null;
+      content: string;
+      metadata: Record<string, unknown>;
+      embedding: number[];
+    }>;
+  }): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const source = await client.query(
+        'SELECT * FROM knowledge_sources WHERE project_id=$1 AND id=$2 FOR UPDATE',
+        [input.document.projectId, input.document.knowledgeSourceId],
+      );
+      const row = source.rows[0] as Record<string, unknown> | undefined;
+      if (!row) throw new Error('KnowledgeSource is unavailable in the document project.');
+      if (row.embedding_provider !== input.provider || row.embedding_model !== input.model)
+        throw new Error('Embedding provider or model does not match the KnowledgeSource.');
+      if (row.embedding_dimensions != null && Number(row.embedding_dimensions) !== input.dimensions)
+        throw new Error('Embedding dimensions do not match existing source embeddings.');
+      if (input.chunks.some((chunk) => chunk.embedding.length !== input.dimensions))
+        throw new Error('Embedding dimensions are inconsistent.');
+      await client.query(
+        'UPDATE knowledge_sources SET embedding_dimensions=$2,updated_at=NOW() WHERE id=$1',
+        [input.document.knowledgeSourceId, input.dimensions],
+      );
+      await client.query('DELETE FROM knowledge_chunks WHERE knowledge_document_id=$1', [
+        input.document.id,
+      ]);
+      for (const chunk of input.chunks) {
+        const inserted = await client.query(
+          'INSERT INTO knowledge_chunks(knowledge_source_id,knowledge_document_id,project_id,chunk_index,page_number,content,metadata_json) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+          [
+            input.document.knowledgeSourceId,
+            input.document.id,
+            input.document.projectId,
+            chunk.chunkIndex,
+            chunk.pageNumber,
+            chunk.content,
+            chunk.metadata,
+          ],
+        );
+        const chunkId = String(inserted.rows[0]?.id);
+        await client.query(
+          'INSERT INTO knowledge_chunk_embeddings(knowledge_chunk_id,project_id,embedding,provider,model,dimensions,version) VALUES($1,$2,$3::vector,$4,$5,$6,1)',
+          [
+            chunkId,
+            input.document.projectId,
+            `[${chunk.embedding.join(',')}]`,
+            input.provider,
+            input.model,
+            input.dimensions,
+          ],
+        );
+      }
+      await client.query(
+        "UPDATE knowledge_documents SET status='READY',error_message=NULL,updated_at=NOW() WHERE id=$1",
+        [input.document.id],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  public async listKnowledgeChunks(
+    projectId: string,
+    sourceId: string,
+    documentId?: string,
+  ): Promise<KnowledgeChunkRecord[]> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM knowledge_chunks WHERE project_id=$1 AND knowledge_source_id=$2 AND ($3::uuid IS NULL OR knowledge_document_id=$3) ORDER BY knowledge_document_id,chunk_index',
+      [projectId, sourceId, documentId ?? null],
+    );
+    return rows.map((row) => knowledgeChunkFromRow(row as Record<string, unknown>));
+  }
+  public async searchKnowledgeChunks(input: {
+    projectId: string;
+    sourceId: string;
+    provider: string;
+    model: string;
+    dimensions: number;
+    queryEmbedding: number[];
+    topK: number;
+    documentId?: string;
+  }): Promise<RetrievalResultRecord[]> {
+    if (input.queryEmbedding.length !== input.dimensions)
+      throw new Error('Query embedding dimensions are inconsistent.');
+    const vector = `[${input.queryEmbedding.join(',')}]`;
+    const { rows } = await this.pool.query(
+      'SELECT c.*,d.original_filename,1-(e.embedding <=> $7::vector) AS similarity FROM knowledge_chunks c JOIN knowledge_documents d ON d.id=c.knowledge_document_id JOIN knowledge_chunk_embeddings e ON e.knowledge_chunk_id=c.id WHERE c.project_id=$1 AND c.knowledge_source_id=$2 AND e.provider=$3 AND e.model=$4 AND e.dimensions=$5 AND ($6::uuid IS NULL OR c.knowledge_document_id=$6) ORDER BY e.embedding <=> $7::vector,c.chunk_index LIMIT $8',
+      [
+        input.projectId,
+        input.sourceId,
+        input.provider,
+        input.model,
+        input.dimensions,
+        input.documentId ?? null,
+        vector,
+        input.topK,
+      ],
+    );
+    return rows.map((row) => retrievalResultFromRow(row as Record<string, unknown>));
+  }
+  public async createCitationValidation(input: {
+    runId: string;
+    nodeRunId: string;
+    retrievedChunkIds: string[];
+    citedChunkIds: string[];
+    sourceMetadata: Array<Record<string, unknown>>;
+  }): Promise<CitationValidationRecord> {
+    const { rows } = await this.pool.query(
+      'INSERT INTO citation_validations(run_id,node_run_id,retrieved_chunk_ids,cited_chunk_ids,source_metadata) VALUES($1,$2,$3,$4,$5) RETURNING *',
+      [
+        input.runId,
+        input.nodeRunId,
+        input.retrievedChunkIds,
+        input.citedChunkIds,
+        input.sourceMetadata,
+      ],
+    );
+    return citationValidationFromRow(rows[0] as Record<string, unknown>);
   }
   public async createPrompt(
     projectId: string,

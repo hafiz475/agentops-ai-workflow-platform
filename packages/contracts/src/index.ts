@@ -137,6 +137,17 @@ export const httpRequestNodeSchema = nodeBaseSchema.extend({
       }
     }),
 });
+export const retrievalNodeSchema = nodeBaseSchema.extend({
+  type: z.literal('RETRIEVAL'),
+  config: z
+    .object({
+      knowledge_source_id: z.string().uuid(),
+      query_path: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_.]*$/),
+      top_k: z.number().int().min(1).max(20).default(5),
+      document_id: z.string().uuid().optional(),
+    })
+    .strict(),
+});
 export const workflowNodeSchema = z.discriminatedUnion('type', [
   inputNodeSchema,
   promptNodeSchema,
@@ -145,6 +156,7 @@ export const workflowNodeSchema = z.discriminatedUnion('type', [
   conditionNodeSchema,
   transformNodeSchema,
   httpRequestNodeSchema,
+  retrievalNodeSchema,
   outputNodeSchema,
 ]);
 export const workflowEdgeSchema = z
@@ -178,6 +190,18 @@ export const evaluatorConfigSchema = z.discriminatedUnion('type', [
     })
     .strict(),
   z.object({ type: z.literal('JSON_SCHEMA'), schema: z.record(z.string(), z.unknown()) }).strict(),
+  z.object({ type: z.literal('RETRIEVAL_HIT_AT_K'), k: z.number().int().min(1).max(20) }).strict(),
+  z
+    .object({ type: z.literal('RETRIEVAL_RECALL_AT_K'), k: z.number().int().min(1).max(20) })
+    .strict(),
+  z.object({ type: z.literal('RETRIEVAL_MRR') }).strict(),
+  z
+    .object({
+      type: z.literal('CITATION_MATCH'),
+      required_chunk_ids: z.array(z.string().uuid()).default([]),
+      forbidden_chunk_ids: z.array(z.string().uuid()).default([]),
+    })
+    .strict(),
 ]);
 export type EvaluatorConfig = z.infer<typeof evaluatorConfigSchema>;
 
@@ -198,6 +222,22 @@ export const generateResponseSchema = z.object({
 });
 export type GenerateRequest = z.infer<typeof generateRequestSchema>;
 export type GenerateResponse = z.infer<typeof generateResponseSchema>;
+
+export const embeddingRequestSchema = z.object({
+  texts: z.array(z.string().min(1).max(100_000)).min(1).max(128),
+  provider: z.enum(['development', 'openai']),
+  model: z.string().min(1).max(200),
+});
+export const embeddingResponseSchema = z.object({
+  vectors: z.array(z.array(z.number().finite()).min(1)).min(1),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  dimensions: z.number().int().positive(),
+  latency_ms: z.number().int().nonnegative(),
+  input_tokens: z.number().int().nonnegative().nullable(),
+});
+export type EmbeddingRequest = z.infer<typeof embeddingRequestSchema>;
+export type EmbeddingResponse = z.infer<typeof embeddingResponseSchema>;
 
 export const runStatusSchema = z.enum([
   'QUEUED',

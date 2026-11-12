@@ -1,14 +1,17 @@
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import Fastify, { type FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
 import { Pool } from 'pg';
-import type { AiServiceClient } from './ai-client.js';
+import type { AiServiceClient, EmbeddingServiceClient } from './ai-client.js';
 import { HttpAiServiceClient } from './ai-client.js';
 import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { RunExecutor } from './executor.js';
 import { EvaluationExecutor } from './evaluation-executor.js';
 import { registerMilestone2Routes } from './milestone2-routes.js';
+import { registerKnowledgeRoutes } from './knowledge-routes.js';
+import { KnowledgeIngestionProcessor } from './knowledge.js';
 import { registerApiRoutes } from './routes.js';
 import { PostgresStore, type Store } from './store.js';
 import { BullDurableQueue, type DurableQueue } from './queue.js';
@@ -17,6 +20,7 @@ export interface Dependencies {
   checkPostgres(): Promise<void>;
   checkRedis(): Promise<void>;
   aiClient: AiServiceClient;
+  embeddingClient?: EmbeddingServiceClient;
   store: Store;
   queue?: DurableQueue;
   close(): Promise<void>;
@@ -26,6 +30,7 @@ const createDependencies = (config: Config): Dependencies => {
   const pool = new Pool({ connectionString: config.DATABASE_URL, connectionTimeoutMillis: 2_000 });
   const redis = new Redis(config.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
   const queue = new BullDurableQueue(config.REDIS_URL);
+  const aiClient = new HttpAiServiceClient(config.AI_SERVICE_URL);
   return {
     async checkPostgres() {
       await pool.query('SELECT 1');
@@ -34,7 +39,8 @@ const createDependencies = (config: Config): Dependencies => {
       if (redis.status === 'wait') await redis.connect();
       await redis.ping();
     },
-    aiClient: new HttpAiServiceClient(config.AI_SERVICE_URL),
+    aiClient,
+    embeddingClient: aiClient,
     store: new PostgresStore(pool),
     queue,
     async close() {
@@ -49,6 +55,7 @@ export const buildApp = async (
 ): Promise<FastifyInstance> => {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
   await app.register(cors, { origin: true });
+  await app.register(multipart, { limits: { files: 1, fileSize: 5_242_880 } });
 
   app.get('/health', async () => ({
     status: 'ok',
@@ -69,10 +76,22 @@ export const buildApp = async (
     }
   });
 
-  const executor = new RunExecutor(dependencies.store, dependencies.aiClient, {
-    info: (data, message) => app.log.info(data, message),
-    error: (data, message) => app.log.error(data, message),
-  });
+  const embeddingClient =
+    dependencies.embeddingClient ??
+    ('embedTexts' in dependencies.aiClient
+      ? (dependencies.aiClient as AiServiceClient & EmbeddingServiceClient)
+      : undefined);
+  const executor = new RunExecutor(
+    dependencies.store,
+    dependencies.aiClient,
+    {
+      info: (data, message) => app.log.info(data, message),
+      error: (data, message) => app.log.error(data, message),
+    },
+    120_000,
+    {},
+    embeddingClient,
+  );
   const queue: DurableQueue = dependencies.queue ?? {
     async enqueueRun(runId: string) {
       const run = await dependencies.store.getRunById(runId);
@@ -99,6 +118,10 @@ export const buildApp = async (
       }
       return `test-evaluation-${evaluationRunId}`;
     },
+    async enqueueKnowledgeIngestion(documentId: string) {
+      if (embeddingClient) setImmediate(() => void ingestionProcessor.process(documentId));
+      return `test-ingestion-${documentId}`;
+    },
     async removeRun() {},
     async close() {},
   };
@@ -106,8 +129,24 @@ export const buildApp = async (
     info: (data, message) => app.log.info(data, message),
     error: (data, message) => app.log.error(data, message),
   });
+  const ingestionProcessor = new KnowledgeIngestionProcessor(
+    dependencies.store,
+    embeddingClient ?? {
+      async embedTexts() {
+        throw new Error('Embedding service is unavailable.');
+      },
+      async embedQuery() {
+        throw new Error('Embedding service is unavailable.');
+      },
+    },
+    {
+      info: (data, message) => app.log.info(data, message),
+      error: (data, message) => app.log.error(data, message),
+    },
+  );
   await registerApiRoutes(app, dependencies.store, queue);
   await registerMilestone2Routes(app, dependencies.store, queue);
+  await registerKnowledgeRoutes(app, dependencies.store, queue);
   app.addHook('onClose', async () => dependencies.close());
   return app;
 };

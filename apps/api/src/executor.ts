@@ -1,10 +1,16 @@
 import type { GenerateResponse, WorkflowGraph, WorkflowNode } from '@agentops/contracts';
-import type { AiServiceClient } from './ai-client.js';
-import { TransientAiError } from './ai-client.js';
+import type { AiServiceClient, EmbeddingServiceClient } from './ai-client.js';
+import { TransientAiError, TransientEmbeddingError } from './ai-client.js';
 import { renderPrompt, validateWorkflowGraph } from './graph.js';
 import type { RunRecord, Store, WorkflowVersionRecord } from './store.js';
 import { executeHttpRequest, HttpToolBlockedError, HttpToolTransientError } from './http-tool.js';
-import { evaluateCondition, renderStructuredValue } from './tool-values.js';
+import { evaluateCondition, readPath, renderStructuredValue } from './tool-values.js';
+import {
+  rankRetrievalResults,
+  renderRetrievalContext,
+  validateCitations,
+  type RankedRetrievalResult,
+} from './retrieval.js';
 
 export interface RunLogger {
   info(data: Record<string, unknown>, message: string): void;
@@ -20,6 +26,7 @@ export class RunExecutor {
     private readonly logger: RunLogger,
     private readonly workflowTimeoutMs = 120_000,
     private readonly toolSecrets: Record<string, Record<string, string>> = {},
+    private readonly embeddings?: EmbeddingServiceClient,
   ) {}
 
   public async execute(run: RunRecord, version: WorkflowVersionRecord): Promise<ExecutionOutcome> {
@@ -242,6 +249,119 @@ export class RunExecutor {
         if (typeof input.input !== 'string' || !input.input.trim())
           throw new Error('Runtime input.input must be a non-empty string.');
         return { input: input.input };
+      case 'RETRIEVAL': {
+        const query = readPath(input, node.config.query_path);
+        if (typeof query !== 'string' || !query.trim())
+          throw new Error(`RETRIEVAL query path ${node.config.query_path} must resolve to text.`);
+        if (!this.embeddings) throw new Error('Embedding service is unavailable.');
+        const source = await this.store.getKnowledgeSource(
+          projectId,
+          node.config.knowledge_source_id,
+        );
+        if (!source) throw new Error('KnowledgeSource is unavailable in this workflow project.');
+        if (!source.embeddingDimensions)
+          throw new Error('KnowledgeSource has no ready embeddings.');
+        const started = Date.now();
+        const traceBase = {
+          knowledge_source_id: source.id,
+          query_length: query.length,
+          top_k: node.config.top_k,
+          embedding_provider: source.embeddingProvider,
+          embedding_model: source.embeddingModel,
+        };
+        await this.store.addTrace({
+          runId,
+          nodeRunId,
+          eventType: 'RETRIEVAL_STARTED',
+          metadata: traceBase,
+        });
+        this.logger.info(
+          { project_id: projectId, run_id: runId, node_id: node.id, ...traceBase },
+          'retrieval.started',
+        );
+        try {
+          const embedded = await this.embeddings.embedQuery({
+            query: query.trim(),
+            provider: source.embeddingProvider,
+            model: source.embeddingModel,
+          });
+          if (
+            embedded.provider !== source.embeddingProvider ||
+            embedded.model !== source.embeddingModel ||
+            embedded.dimensions !== source.embeddingDimensions
+          )
+            throw new Error('Query embedding is incompatible with the KnowledgeSource.');
+          const queryEmbedding = embedded.vectors[0];
+          if (!queryEmbedding) throw new Error('Embedding provider returned no query vector.');
+          const records = await this.store.searchKnowledgeChunks({
+            projectId,
+            sourceId: source.id,
+            provider: embedded.provider,
+            model: embedded.model,
+            dimensions: embedded.dimensions,
+            queryEmbedding,
+            topK: node.config.top_k,
+            ...(node.config.document_id ? { documentId: node.config.document_id } : {}),
+          });
+          const results = rankRetrievalResults(records);
+          const sourceMetadata = results.map((result) => ({
+            rank: result.rank,
+            chunk_id: result.chunk_id,
+            document_id: result.document_id,
+            page_number: result.page_number,
+            filename: result.source.filename,
+            score: result.score,
+            score_type: result.score_type,
+          }));
+          const latencyMs = Date.now() - started;
+          await this.store.addTrace({
+            runId,
+            nodeRunId,
+            eventType: 'RETRIEVAL_COMPLETED',
+            metadata: {
+              ...traceBase,
+              result_count: results.length,
+              latency_ms: latencyMs,
+              results: sourceMetadata,
+            },
+          });
+          this.logger.info(
+            {
+              project_id: projectId,
+              run_id: runId,
+              node_id: node.id,
+              result_count: results.length,
+              latency_ms: latencyMs,
+            },
+            'retrieval.completed',
+          );
+          return {
+            ...input,
+            query: query.trim(),
+            retrieval_results: results,
+            retrieved_chunk_ids: results.map((result) => result.chunk_id),
+            retrieval_context: renderRetrievalContext(results),
+          };
+        } catch (error) {
+          await this.store.addTrace({
+            runId,
+            nodeRunId,
+            eventType: 'RETRIEVAL_FAILED',
+            metadata: {
+              ...traceBase,
+              latency_ms: Date.now() - started,
+              reason: error instanceof Error ? error.message : 'Retrieval failed.',
+            },
+          });
+          this.logger.error(
+            { project_id: projectId, run_id: runId, node_id: node.id },
+            'retrieval.failed',
+          );
+          if (error instanceof TransientEmbeddingError)
+            throw new TransientExecutionError(error.message);
+          throw error;
+        }
+      }
       case 'PROMPT': {
         if (typeof input.input !== 'string') throw new Error('PROMPT requires string input.');
         const promptVersion =
@@ -252,14 +372,24 @@ export class RunExecutor {
           throw new Error('Referenced PromptVersion is unavailable in this project.');
         const template = 'template' in node.config ? node.config.template : promptVersion?.template;
         if (!template) throw new Error('PROMPT requires a template or PromptVersion.');
-        const prompt = renderPrompt(template, { input: input.input });
+        const values: Record<string, string> = { input: input.input };
+        if (typeof input.retrieval_context === 'string')
+          values.retrieval_context = input.retrieval_context;
+        const prompt = renderPrompt(template, values);
         await this.store.addTrace({
           runId,
           nodeRunId,
           eventType: 'PROMPT_RENDERED',
-          metadata: { prompt, prompt_version_id: promptVersion?.id ?? null },
+          metadata:
+            typeof input.retrieval_context === 'string'
+              ? {
+                  grounded: true,
+                  prompt_length: prompt.length,
+                  prompt_version_id: promptVersion?.id ?? null,
+                }
+              : { prompt, prompt_version_id: promptVersion?.id ?? null },
         });
-        return { prompt };
+        return { ...input, prompt };
       }
       case 'LLM': {
         if (typeof input.prompt !== 'string') throw new Error('LLM requires a rendered prompt.');
@@ -288,13 +418,58 @@ export class RunExecutor {
             output_tokens: response.output_tokens,
           },
         });
+        const retrieved = Array.isArray(input.retrieval_results)
+          ? (input.retrieval_results as RankedRetrievalResult[])
+          : [];
+        let citedChunkIds: string[] = [];
+        if (retrieved.length) {
+          const validation = validateCitations(response.text, retrieved);
+          if (validation.invalidReferences.length) {
+            await this.store.addTrace({
+              runId,
+              nodeRunId,
+              eventType: 'CITATION_VALIDATION_FAILED',
+              metadata: { invalid_references: validation.invalidReferences },
+            });
+            this.logger.error({ run_id: runId, node_id: node.id }, 'citation.validation_failed');
+            throw new Error(
+              `Model cited sources that were not retrieved: ${validation.invalidReferences.join(', ')}.`,
+            );
+          }
+          citedChunkIds = validation.citedChunkIds;
+          const sourceMetadata = retrieved.map((result) => ({
+            chunk_id: result.chunk_id,
+            document_id: result.document_id,
+            page_number: result.page_number,
+            filename: result.source.filename,
+          }));
+          await this.store.createCitationValidation({
+            runId,
+            nodeRunId,
+            retrievedChunkIds: retrieved.map((result) => result.chunk_id),
+            citedChunkIds,
+            sourceMetadata,
+          });
+          await this.store.addTrace({
+            runId,
+            nodeRunId,
+            eventType: 'CITATIONS_VALIDATED',
+            metadata: {
+              retrieved_chunk_ids: retrieved.map((result) => result.chunk_id),
+              cited_chunk_ids: citedChunkIds,
+              sources: sourceMetadata,
+            },
+          });
+        }
         return {
+          ...input,
           text: response.text,
           provider: response.provider,
           model: response.model,
           latency_ms: response.latency_ms,
           input_tokens: response.input_tokens,
           output_tokens: response.output_tokens,
+          ...(retrieved.length ? { citations: citedChunkIds } : {}),
         };
       }
       case 'CONDITION': {
@@ -381,7 +556,13 @@ export class RunExecutor {
       }
       case 'OUTPUT':
         if (typeof input.text !== 'string') throw new Error('OUTPUT requires model text.');
-        return { text: input.text };
+        return {
+          text: input.text,
+          ...(Array.isArray(input.citations) ? { citations: input.citations } : {}),
+          ...(Array.isArray(input.retrieval_results)
+            ? { retrieval_results: input.retrieval_results }
+            : {}),
+        };
     }
   }
 

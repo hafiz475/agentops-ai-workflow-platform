@@ -15,6 +15,10 @@ import type {
   TraceEventRecord,
   WorkflowRecord,
   WorkflowVersionRecord,
+  KnowledgeSourceRecord,
+  KnowledgeDocumentRecord,
+  KnowledgeChunkRecord,
+  CitationValidationRecord,
 } from '../src/store.js';
 
 const now = () => new Date().toISOString();
@@ -32,6 +36,14 @@ export class MemoryStore implements Store {
   public evaluationCases: EvaluationCaseRecord[] = [];
   public evaluationRuns: EvaluationRunRecord[] = [];
   public evaluationCaseResults: EvaluationCaseResultRecord[] = [];
+  public knowledgeSources: KnowledgeSourceRecord[] = [];
+  public knowledgeDocuments: KnowledgeDocumentRecord[] = [];
+  public knowledgeChunks: KnowledgeChunkRecord[] = [];
+  public chunkEmbeddings = new Map<
+    string,
+    { embedding: number[]; provider: string; model: string; dimensions: number }
+  >();
+  public citationValidations: CitationValidationRecord[] = [];
   async createProject(input: { name: string; description: string | null }) {
     const item = { id: randomUUID(), ...input, createdAt: now(), updatedAt: now() };
     this.projects.push(item);
@@ -270,6 +282,218 @@ export class MemoryStore implements Store {
   async listTrace(projectId: string, workflowId: string, runId: string) {
     if (!(await this.getRun(projectId, workflowId, runId))) return null;
     return this.traces.filter((e) => e.runId === runId);
+  }
+  async createKnowledgeSource(
+    projectId: string,
+    input: {
+      name: string;
+      description: string | null;
+      embeddingProvider: 'development' | 'openai';
+      embeddingModel: string;
+    },
+  ) {
+    if (!(await this.getProject(projectId))) return null;
+    const item: KnowledgeSourceRecord = {
+      id: randomUUID(),
+      projectId,
+      ...input,
+      sourceType: 'DOCUMENTS',
+      embeddingDimensions: null,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.knowledgeSources.push(item);
+    return item;
+  }
+  async listKnowledgeSources(projectId: string) {
+    return this.knowledgeSources.filter((item) => item.projectId === projectId);
+  }
+  async getKnowledgeSource(projectId: string, sourceId: string) {
+    return (
+      this.knowledgeSources.find((item) => item.projectId === projectId && item.id === sourceId) ??
+      null
+    );
+  }
+  async createKnowledgeDocument(input: {
+    projectId: string;
+    knowledgeSourceId: string;
+    originalFilename: string;
+    mimeType: string;
+    fileSize: number;
+    sha256Hash: string;
+    rawContent: Buffer;
+  }) {
+    if (!(await this.getKnowledgeSource(input.projectId, input.knowledgeSourceId))) return null;
+    const existing = this.knowledgeDocuments.find(
+      (item) =>
+        item.knowledgeSourceId === input.knowledgeSourceId && item.sha256Hash === input.sha256Hash,
+    );
+    if (existing) return { document: existing, created: false };
+    const item: KnowledgeDocumentRecord = {
+      id: randomUUID(),
+      ...input,
+      status: 'UPLOADED',
+      errorMessage: null,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.knowledgeDocuments.push(item);
+    return { document: item, created: true };
+  }
+  async listKnowledgeDocuments(projectId: string, sourceId: string) {
+    return this.knowledgeDocuments.filter(
+      (item) => item.projectId === projectId && item.knowledgeSourceId === sourceId,
+    );
+  }
+  async getKnowledgeDocument(projectId: string, sourceId: string, documentId: string) {
+    return (
+      this.knowledgeDocuments.find(
+        (item) =>
+          item.projectId === projectId &&
+          item.knowledgeSourceId === sourceId &&
+          item.id === documentId,
+      ) ?? null
+    );
+  }
+  async getKnowledgeDocumentById(documentId: string) {
+    return this.knowledgeDocuments.find((item) => item.id === documentId) ?? null;
+  }
+  async listRecoverableKnowledgeDocuments() {
+    return this.knowledgeDocuments.filter((item) =>
+      ['UPLOADED', 'PROCESSING'].includes(item.status),
+    );
+  }
+  async updateKnowledgeDocument(
+    documentId: string,
+    patch: { status: KnowledgeDocumentRecord['status']; errorMessage?: string | null },
+  ) {
+    const item = await this.getKnowledgeDocumentById(documentId);
+    if (item)
+      Object.assign(item, {
+        status: patch.status,
+        errorMessage: patch.errorMessage ?? null,
+        updatedAt: now(),
+      });
+  }
+  async replaceDocumentChunks(input: {
+    document: KnowledgeDocumentRecord;
+    provider: string;
+    model: string;
+    dimensions: number;
+    chunks: Array<{
+      chunkIndex: number;
+      pageNumber: number | null;
+      content: string;
+      metadata: Record<string, unknown>;
+      embedding: number[];
+    }>;
+  }) {
+    const source = await this.getKnowledgeSource(
+      input.document.projectId,
+      input.document.knowledgeSourceId,
+    );
+    if (!source) throw new Error('KnowledgeSource is unavailable in the document project.');
+    if (source.embeddingProvider !== input.provider || source.embeddingModel !== input.model)
+      throw new Error('Embedding provider or model does not match the KnowledgeSource.');
+    if (source.embeddingDimensions !== null && source.embeddingDimensions !== input.dimensions)
+      throw new Error('Embedding dimensions do not match existing source embeddings.');
+    if (input.chunks.some((chunk) => chunk.embedding.length !== input.dimensions))
+      throw new Error('Embedding dimensions are inconsistent.');
+    const removed = this.knowledgeChunks.filter(
+      (item) => item.knowledgeDocumentId === input.document.id,
+    );
+    for (const item of removed) this.chunkEmbeddings.delete(item.id);
+    this.knowledgeChunks = this.knowledgeChunks.filter(
+      (item) => item.knowledgeDocumentId !== input.document.id,
+    );
+    for (const chunk of input.chunks) {
+      const item: KnowledgeChunkRecord = {
+        id: randomUUID(),
+        knowledgeSourceId: input.document.knowledgeSourceId,
+        knowledgeDocumentId: input.document.id,
+        projectId: input.document.projectId,
+        chunkIndex: chunk.chunkIndex,
+        pageNumber: chunk.pageNumber,
+        content: chunk.content,
+        metadata: structuredClone(chunk.metadata),
+        createdAt: now(),
+      };
+      this.knowledgeChunks.push(item);
+      this.chunkEmbeddings.set(item.id, {
+        embedding: [...chunk.embedding],
+        provider: input.provider,
+        model: input.model,
+        dimensions: input.dimensions,
+      });
+    }
+    source.embeddingDimensions = input.dimensions;
+    source.updatedAt = now();
+    await this.updateKnowledgeDocument(input.document.id, { status: 'READY' });
+  }
+  async listKnowledgeChunks(projectId: string, sourceId: string, documentId?: string) {
+    return this.knowledgeChunks.filter(
+      (item) =>
+        item.projectId === projectId &&
+        item.knowledgeSourceId === sourceId &&
+        (!documentId || item.knowledgeDocumentId === documentId),
+    );
+  }
+  async searchKnowledgeChunks(input: {
+    projectId: string;
+    sourceId: string;
+    provider: string;
+    model: string;
+    dimensions: number;
+    queryEmbedding: number[];
+    topK: number;
+    documentId?: string;
+  }) {
+    const cosine = (left: number[], right: number[]) => {
+      const dot = left.reduce((sum, value, index) => sum + value * (right[index] ?? 0), 0);
+      const a = Math.sqrt(left.reduce((sum, value) => sum + value * value, 0));
+      const b = Math.sqrt(right.reduce((sum, value) => sum + value * value, 0));
+      return a && b ? dot / (a * b) : 0;
+    };
+    return this.knowledgeChunks
+      .filter(
+        (chunk) =>
+          chunk.projectId === input.projectId &&
+          chunk.knowledgeSourceId === input.sourceId &&
+          (!input.documentId || chunk.knowledgeDocumentId === input.documentId),
+      )
+      .flatMap((chunk) => {
+        const embedding = this.chunkEmbeddings.get(chunk.id);
+        if (
+          !embedding ||
+          embedding.provider !== input.provider ||
+          embedding.model !== input.model ||
+          embedding.dimensions !== input.dimensions
+        )
+          return [];
+        const document = this.knowledgeDocuments.find(
+          (item) => item.id === chunk.knowledgeDocumentId,
+        );
+        return [
+          {
+            ...chunk,
+            filename: document?.originalFilename ?? 'unknown',
+            similarity: cosine(input.queryEmbedding, embedding.embedding),
+          },
+        ];
+      })
+      .sort((a, b) => b.similarity - a.similarity || a.chunkIndex - b.chunkIndex)
+      .slice(0, input.topK);
+  }
+  async createCitationValidation(input: {
+    runId: string;
+    nodeRunId: string;
+    retrievedChunkIds: string[];
+    citedChunkIds: string[];
+    sourceMetadata: Array<Record<string, unknown>>;
+  }) {
+    const item: CitationValidationRecord = { id: randomUUID(), ...input, createdAt: now() };
+    this.citationValidations.push(item);
+    return item;
   }
   async createPrompt(projectId: string, input: { name: string; description: string | null }) {
     if (!(await this.getProject(projectId))) return null;

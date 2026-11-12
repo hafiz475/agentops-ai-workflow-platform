@@ -1,6 +1,6 @@
-# Azure VM deployment runbook � Milestone 3
+# Azure VM deployment runbook - Milestone 5
 
-This runbook now covers Milestone 4. The VM and OIDC pipeline remain unchanged; the release starts the same six Compose services and opens no new inbound ports.
+Milestone 5 retains the VM and OIDC pipeline, starts the same six Compose services, and opens no new inbound ports. PostgreSQL now uses `pgvector/pgvector:pg16` so migration 0005 can enable vector storage while preserving the existing volume.
 
 ## Azure portal settings retained
 
@@ -10,7 +10,7 @@ This runbook now covers Milestone 4. The VM and OIDC pipeline remain unchanged; 
 - NSG: TCP 22 only from the operator `/32`; TCP 3000 and 3001 from the internet
 - Never add public rules for 5432, 6379, or 8000
 - System-assigned identity, secure boot, vTPM, managed boot diagnostics
-- Tags: `application=agentops-studio`, `environment=demo`, `milestone=4`
+- Tags: `application=agentops-studio`, `environment=demo`, `milestone=5`
 
 ## Release command
 
@@ -23,16 +23,7 @@ git checkout --detach "$DEPLOY_COMMIT"
 docker compose up -d --build --remove-orphans
 ```
 
-The Compose stack is now:
-
-```text
-web (public 3000)
-api (public 3001)
-worker (private)
-ai-service (private 8000)
-postgres (private 5432)
-redis (private 6379, append-only persistence)
-```
+The Compose stack remains web (public 3000), API (public 3001), and private worker, AI service (8000), PostgreSQL (5432), and Redis (6379). No NSG change is required. Optional tool and provider secrets stay only in the VM environment.
 
 ## Verification
 
@@ -44,21 +35,20 @@ curl -fsS http://127.0.0.1:3001/health
 curl -fsS http://127.0.0.1:3001/ready
 ```
 
-Then smoke-test from the UI:
+Then verify the retained and new behaviors:
 
-1. Run `INPUT -> PROMPT -> LLM -> OUTPUT` and confirm completion.
-2. Run a version containing HUMAN_APPROVAL and confirm `WAITING_FOR_APPROVAL`.
-3. Approve it from Approvals; confirm resume and that LLM has one completed NodeRun.
-4. Repeat and reject; confirm `CANCELLED` / `HUMAN_REJECTED`.
-5. Cancel a queued or waiting run.
-6. Launch an evaluation and confirm its case WorkflowRuns complete.
-7. Review `WORKER_CLAIMED_RUN`, approval, resume, retry/cancel, and completion trace events.
-8. Run a CONDITION workflow and confirm only one branch completes while the other has `SKIPPED` NodeRuns.
-9. Run TRANSFORM and a controlled public HTTP_REQUEST; confirm bounded response metadata and no sensitive headers in traces.
-10. Attempt `http://127.0.0.1` and a redirect to a private address; confirm `HTTP_REQUEST_BLOCKED` and a failed run.
+1. Run `INPUT -> PROMPT -> LLM -> OUTPUT`.
+2. Pause and resume HUMAN_APPROVAL; confirm the completed LLM NodeRun is not repeated. Reject another approval and confirm cancellation.
+3. Run CONDITION/TRANSFORM and a controlled public HTTP_REQUEST. Confirm the unselected branch is skipped and private/redirect SSRF attempts are blocked.
+4. Create a development-embedding Knowledge Source, upload a synthetic engineering TXT document, and wait for `READY`.
+5. Confirm chunks retain page/order provenance and provider/model metadata; vectors must not be returned.
+6. Run `INPUT -> RETRIEVAL -> PROMPT -> LLM -> OUTPUT` with “What abnormal vibration was found?” Confirm the expected ranked source and retrieval traces.
+7. Confirm controlled context reaches PROMPT, output completes, and `CITATIONS_VALIDATED` contains only retrieved source metadata.
+8. From another project, attempt to reference the source and confirm validation rejects it.
+9. Run Hit@K, Recall@K, and MRR evaluation cases through normal WorkflowRuns.
 
-No NSG change is required: HTTP tools make outbound requests from the private worker. Do not expose worker, AI, PostgreSQL, or Redis ports. Optional tool secrets belong only in the VM `.env` as project-scoped `TOOL_SECRETS_JSON`; never put secret values in workflow JSON or GitHub variables.
+If `AI_OPENAI_API_KEY` is absent, use `development` / `development-hash-v1`. Do not claim OpenAI embedding execution unless it was actually observed. Optional OpenAI sources use `AI_OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`).
 
 ## Budget and shutdown
 
-Keep the existing Azure budget alerts. Stop/deallocate the VM when the demo is unused; stopping only the OS is still billable. Deleting `rg-agentops-demo` removes all resources and data and should only be done intentionally.
+Keep the existing Azure budget alerts. Stop/deallocate the VM when unused; stopping only the OS is still billable. Deleting `rg-agentops-demo` removes all resources and data and should only be done intentionally.

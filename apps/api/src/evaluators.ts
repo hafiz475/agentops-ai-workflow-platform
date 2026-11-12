@@ -24,6 +24,26 @@ const textValue = (value: Record<string, unknown>): string => {
   return typeof comparable === 'string' ? comparable : JSON.stringify(comparable);
 };
 
+const stringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
+const retrievalResults = (
+  actual: Record<string, unknown>,
+): Array<{ chunk_id?: string; document_id?: string }> =>
+  Array.isArray(actual.retrieval_results)
+    ? actual.retrieval_results.filter((item): item is { chunk_id?: string; document_id?: string } =>
+        Boolean(item && typeof item === 'object' && !Array.isArray(item)),
+      )
+    : [];
+
+const isRelevant = (
+  result: { chunk_id?: string; document_id?: string },
+  chunkIds: Set<string>,
+  documentIds: Set<string>,
+): boolean =>
+  (typeof result.chunk_id === 'string' && chunkIds.has(result.chunk_id)) ||
+  (typeof result.document_id === 'string' && documentIds.has(result.document_id));
+
 const matchesSchema = (value: unknown, schema: Record<string, unknown>): boolean => {
   const type = schema.type;
   if (type === 'object') {
@@ -93,6 +113,58 @@ export const evaluateOutput = (
     case 'JSON_SCHEMA':
       passed = matchesSchema(actual, config.schema);
       break;
+    case 'RETRIEVAL_HIT_AT_K': {
+      const expectedChunks = new Set(stringArray(expected.expected_chunk_ids));
+      const expectedDocuments = new Set(stringArray(expected.expected_document_ids));
+      if (!expectedChunks.size && !expectedDocuments.size)
+        throw new Error('Retrieval evaluator requires expected chunk or document IDs.');
+      passed = retrievalResults(actual)
+        .slice(0, config.k)
+        .some((result) => isRelevant(result, expectedChunks, expectedDocuments));
+      break;
+    }
+    case 'RETRIEVAL_RECALL_AT_K': {
+      const expectedChunks = new Set(stringArray(expected.expected_chunk_ids));
+      const expectedDocuments = new Set(stringArray(expected.expected_document_ids));
+      const expectedCount = expectedChunks.size + expectedDocuments.size;
+      if (!expectedCount)
+        throw new Error('Retrieval evaluator requires expected chunk or document IDs.');
+      const found = new Set<string>();
+      for (const result of retrievalResults(actual).slice(0, config.k)) {
+        if (result.chunk_id && expectedChunks.has(result.chunk_id))
+          found.add(`c:${result.chunk_id}`);
+        if (result.document_id && expectedDocuments.has(result.document_id))
+          found.add(`d:${result.document_id}`);
+      }
+      const score = found.size / expectedCount;
+      return {
+        score,
+        passed: score === 1,
+        details: `${config.type}: ${found.size}/${expectedCount}`,
+      };
+    }
+    case 'RETRIEVAL_MRR': {
+      const expectedChunks = new Set(stringArray(expected.expected_chunk_ids));
+      const expectedDocuments = new Set(stringArray(expected.expected_document_ids));
+      if (!expectedChunks.size && !expectedDocuments.size)
+        throw new Error('Retrieval evaluator requires expected chunk or document IDs.');
+      const index = retrievalResults(actual).findIndex((result) =>
+        isRelevant(result, expectedChunks, expectedDocuments),
+      );
+      const score = index < 0 ? 0 : 1 / (index + 1);
+      return {
+        score,
+        passed: score > 0,
+        details: `${config.type}: reciprocal rank ${score}`,
+      };
+    }
+    case 'CITATION_MATCH': {
+      const cited = new Set(stringArray(actual.citations));
+      passed =
+        config.required_chunk_ids.every((id) => cited.has(id)) &&
+        config.forbidden_chunk_ids.every((id) => !cited.has(id));
+      break;
+    }
   }
   return {
     score: passed ? 1 : 0,

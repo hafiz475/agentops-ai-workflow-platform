@@ -6,6 +6,7 @@ export type NodeType =
   | 'CONDITION'
   | 'TRANSFORM'
   | 'HTTP_REQUEST'
+  | 'RETRIEVAL'
   | 'OUTPUT';
 export interface GraphNode {
   id: string;
@@ -52,6 +53,31 @@ export interface PromptVersion {
   changeNotes: string | null;
   createdAt: string;
 }
+export interface KnowledgeSource {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  sourceType: 'DOCUMENTS';
+  embeddingProvider: 'development' | 'openai';
+  embeddingModel: string;
+  embeddingDimensions: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface KnowledgeDocument {
+  id: string;
+  knowledgeSourceId: string;
+  projectId: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSize: number;
+  sha256Hash: string;
+  status: 'UPLOADED' | 'PROCESSING' | 'READY' | 'FAILED';
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
 export interface Prompt {
   id: string;
   projectId: string;
@@ -65,7 +91,11 @@ export type EvaluatorConfig =
   | { type: 'CONTAINS'; values: string[] }
   | { type: 'NOT_CONTAINS'; values: string[] }
   | { type: 'REGEX'; pattern: string; flags: string }
-  | { type: 'JSON_SCHEMA'; schema: Record<string, unknown> };
+  | { type: 'JSON_SCHEMA'; schema: Record<string, unknown> }
+  | { type: 'RETRIEVAL_HIT_AT_K'; k: number }
+  | { type: 'RETRIEVAL_RECALL_AT_K'; k: number }
+  | { type: 'RETRIEVAL_MRR' }
+  | { type: 'CITATION_MATCH'; required_chunk_ids: string[]; forbidden_chunk_ids: string[] };
 export interface EvaluationCase {
   id: string;
   datasetId: string;
@@ -193,9 +223,10 @@ const apiOrigin =
     : `${window.location.protocol}//${window.location.hostname}:3001`;
 const baseUrl = `${apiOrigin}/api/v1`;
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
+  const multipart = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...init?.headers },
+    headers: { ...(multipart ? {} : { 'content-type': 'application/json' }), ...init?.headers },
   });
   const data: unknown = await response.json();
   if (!response.ok) {
@@ -212,6 +243,31 @@ export const api = {
   listProjects: () => request<Project[]>('/projects'),
   createProject: (name: string) =>
     request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name }) }),
+  listKnowledgeSources: (projectId: string) =>
+    request<KnowledgeSource[]>(`/projects/${projectId}/knowledge-sources`),
+  createKnowledgeSource: (
+    projectId: string,
+    input: {
+      name: string;
+      description?: string | null;
+      embeddingProvider: 'development' | 'openai';
+      embeddingModel?: string;
+    },
+  ) =>
+    request<KnowledgeSource>(`/projects/${projectId}/knowledge-sources`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  listKnowledgeDocuments: (projectId: string, sourceId: string) =>
+    request<KnowledgeDocument[]>(`/projects/${projectId}/knowledge-sources/${sourceId}/documents`),
+  uploadKnowledgeDocument: (projectId: string, sourceId: string, file: File) => {
+    const body = new FormData();
+    body.append('file', file);
+    return request<KnowledgeDocument>(
+      `/projects/${projectId}/knowledge-sources/${sourceId}/documents`,
+      { method: 'POST', body },
+    );
+  },
   listWorkflows: (projectId: string) => request<Workflow[]>(`/projects/${projectId}/workflows`),
   createWorkflow: (projectId: string, name: string) =>
     request<Workflow>(`/projects/${projectId}/workflows`, {

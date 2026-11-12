@@ -1,12 +1,16 @@
 # AgentOps Studio
 
-A production-style AI workflow and observability platform. Milestone 4 adds controlled DAG branches, deterministic conditions/transforms, and an SSRF-safe server-executed HTTP tool without changing the durable worker architecture.
+A production-style AI workflow and observability platform. Milestone 5 adds reusable Knowledge Sources, embeddings, retrieval, grounded RAG context, citation traces, and retrieval evaluation without changing the durable M3/M4 executor architecture.
 
 ## Implemented
 
 - React + TypeScript project, workflow, prompt, evaluation, run, and approval UI
 - ReactFlow DAG workflows with `CONDITION` TRUE/FALSE edges and explicit skipped branches
 - Declarative `CONDITION`, safe structured `TRANSFORM`, and bounded `HTTP_REQUEST` nodes
+- Project-scoped Knowledge Sources with idempotent TXT, PDF, and DOCX ingestion
+- Deterministic chunking, provider-neutral development/OpenAI embeddings, and PostgreSQL `pgvector` storage
+- A reusable `RETRIEVAL` node with ranked provenance, document filters, and cosine-similarity scores
+- Controlled RAG prompt context, validated citations, inspectable source traces, and retrieval evaluation
 - Mutable drafts with immutable WorkflowVersions and PromptVersions
 - Project-scoped Fastify APIs and PostgreSQL persistence
 - BullMQ queues persisted in Redis; the API never performs production execution
@@ -32,13 +36,14 @@ flowchart LR
   API --> Queue[(Redis + BullMQ)]
   Queue --> Worker[Node worker]
   Worker --> DB
-  Worker -->|LLM nodes only| AI[FastAPI AI service]
+  Worker -->|LLM and embedding providers| AI[FastAPI AI service]
   Worker --> Queue
   Worker -->|validated public HTTP only| External[External HTTP service]
+  DB --> Vector[(pgvector embeddings)]
   AI --> Provider[Development or OpenAI]
 ```
 
-The API validates, persists, enqueues, and returns. The worker loads authoritative state from PostgreSQL and owns workflow/evaluation orchestration. Python owns provider generation only. See [ARCHITECTURE.md](ARCHITECTURE.md), [ADRs](docs/adr/README.md), and the [Azure runbook](docs/AZURE_VM_DEPLOYMENT_GUIDE.md).
+The API validates, persists, enqueues, and returns. The worker loads authoritative state from PostgreSQL and owns workflow/evaluation/ingestion orchestration. Python owns provider generation and embedding calls only. See [ARCHITECTURE.md](ARCHITECTURE.md), [ADRs](docs/adr/README.md), and the [Azure runbook](docs/AZURE_VM_DEPLOYMENT_GUIDE.md).
 
 ## Local development
 
@@ -56,7 +61,7 @@ docker compose up --build
 
 Open `http://localhost:3000`; API health/readiness are on port `3001`. The AI service, worker, PostgreSQL, and Redis are private Compose services.
 
-## Milestone 4 flow
+## Durable workflow flow
 
 1. Create and version a linear workflow, optionally containing `HUMAN_APPROVAL`.
 2. `POST /runs` persists `QUEUED`, writes `RUN_QUEUED`, adds a BullMQ job, and returns HTTP 202.
@@ -68,6 +73,16 @@ Open `http://localhost:3000`; API health/readiness are on port `3001`. The AI se
 8. A `CONDITION` selects exactly one labeled edge. The rejected subtree receives `SKIPPED` NodeRuns and `NODE_SKIPPED` traces.
 9. `TRANSFORM` recursively maps constants and controlled `{{path.to.value}}` placeholders; it never evaluates code.
 10. `HTTP_REQUEST` resolves DNS, blocks private/internal destinations, validates each same-origin redirect, streams a bounded response, and persists only safe response headers.
+
+## Milestone 5 retrieval and RAG flow
+
+1. Create a project-scoped Knowledge Source and upload a TXT, PDF, or DOCX file (maximum 5 MiB).
+2. The existing worker consumes an ingestion job, extracts ordered pages, chunks deterministically, embeds in batches, and atomically replaces that document's chunks/vectors before marking it `READY`.
+3. `RETRIEVAL` resolves a controlled query path, embeds the query with the source's exact provider/model, and searches only that project's compatible vectors with cosine similarity.
+4. Ranked output preserves source, document, page, chunk, score, and a deterministic `retrieval_context` that labels document text as untrusted data.
+5. PROMPT can consume `{{input}}` and `{{retrieval_context}}`; LLM output may cite `[[SOURCE:n]]` or `[[CITE:chunk-uuid]]`.
+6. Citation validation rejects references outside the retrieved set and persists retrieved/cited provenance plus `CITATIONS_VALIDATED`.
+7. `RETRIEVAL_HIT_AT_K`, `RETRIEVAL_RECALL_AT_K`, `RETRIEVAL_MRR`, and deterministic citation checks reuse normal evaluation WorkflowRuns.
 
 ## HTTP tool security and secrets
 
@@ -83,7 +98,14 @@ Secrets are injected only into the worker through `TOOL_SECRETS_JSON`, shaped as
 - `POST /api/v1/projects/:projectId/approvals/:approvalId/approve`
 - `POST /api/v1/projects/:projectId/approvals/:approvalId/reject`
 - `/api/v1/projects/:projectId/evaluation-runs`
+- `POST|GET /api/v1/projects/:projectId/knowledge-sources`
+- `POST|GET /api/v1/projects/:projectId/knowledge-sources/:sourceId/documents`
 
 ## Known limitations
 
-The demo has no production authentication, so approval decisions deliberately use the label `demo-reviewer`, not a fabricated identity. M4 rejects merge nodes (every non-INPUT node has one parent), loops, and cycles. DNS is validated immediately before each request, but the platform does not claim immunity from every DNS rebinding race or exactly-once external side effect. Cancellation is cooperative between nodes. The Azure demo is one HTTP VM, not highly available. Retrieval/RAG, controlled agents, and production auth/hardening remain planned.
+The demo has no production authentication, so approval decisions deliberately use the label `demo-reviewer`, not a fabricated identity. Workflows still reject merge nodes (every non-INPUT node has one parent), loops, and cycles. Ingestion accepts only small TXT/PDF/DOCX files and stores upload bytes in PostgreSQL; it is not a large-scale document pipeline. Prompt injection from retrieved text is reduced through deterministic delimiters and instruction/data separation but cannot be eliminated. The OpenAI embedding adapter is optional and requires credentials; development embeddings are deterministic but not semantic-quality embeddings. DNS validation cannot guarantee immunity from every rebinding race, cancellation remains cooperative, and the single Azure VM is not highly available. Controlled agentic workflows and production authentication/hardening remain planned.
+
+## Planned
+
+- Controlled agentic workflows
+- Production authentication and hardening

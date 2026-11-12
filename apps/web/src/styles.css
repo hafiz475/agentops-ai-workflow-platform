@@ -578,6 +578,29 @@ td code {
 .node-http_request {
   border-color: #8b5a14;
 }
+.node-retrieval {
+  border-color: #315fa8;
+  background: #eef5ff;
+}
+.knowledge-documents {
+  margin-top: 24px;
+}
+.retrieval-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+.retrieval-results article {
+  border: 1px solid #cbd9eb;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f7faff;
+}
+.retrieval-results small,
+.retrieval-results p {
+  display: block;
+  margin: 6px 0 0;
+}
 .branch-handle {
   position: absolute;
   right: 10px;

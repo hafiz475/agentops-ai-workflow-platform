@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import Settings, settings
-from app.providers import AIProvider, DevelopmentProvider, OpenAIProvider
+from app.providers import AIProvider, DevelopmentProvider, EmbeddingProvider, OpenAIProvider
 
 
 class ServiceStatus(BaseModel):
@@ -30,10 +30,40 @@ class GenerateResponse(BaseModel):
     output_tokens: int | None = Field(default=None, ge=0)
 
 
+class EmbeddingRequest(BaseModel):
+    texts: list[str] = Field(min_length=1, max_length=128)
+    provider: Literal["development", "openai"]
+    model: str = Field(min_length=1, max_length=200)
+
+
+class EmbeddingResponse(BaseModel):
+    vectors: list[list[float]]
+    provider: str
+    model: str
+    dimensions: int = Field(gt=0)
+    latency_ms: int = Field(ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+
+
 def create_provider(configuration: Settings) -> AIProvider:
     if configuration.provider == "openai" and configuration.openai_api_key:
-        return OpenAIProvider(configuration.openai_api_key, configuration.openai_model)
+        return OpenAIProvider(
+            configuration.openai_api_key,
+            configuration.openai_model,
+            configuration.openai_embedding_model,
+        )
     return DevelopmentProvider()
+
+
+def create_embedding_providers(configuration: Settings) -> dict[str, EmbeddingProvider]:
+    providers: dict[str, EmbeddingProvider] = {"development": DevelopmentProvider()}
+    if configuration.openai_api_key:
+        providers["openai"] = OpenAIProvider(
+            configuration.openai_api_key,
+            configuration.openai_model,
+            configuration.openai_embedding_model,
+        )
+    return providers
 
 
 app = FastAPI(
@@ -42,6 +72,7 @@ app = FastAPI(
     description="Model-provider and AI execution boundary for AgentOps Studio.",
 )
 app.state.provider = create_provider(settings)
+app.state.embedding_providers = create_embedding_providers(settings)
 
 
 def status_response() -> ServiceStatus:
@@ -69,3 +100,25 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
     except Exception as error:
         raise HTTPException(status_code=502, detail="AI provider request failed") from error
     return GenerateResponse(**result.__dict__)
+
+
+@app.post("/v1/embeddings", response_model=EmbeddingResponse, tags=["embeddings"])
+async def embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
+    """Execute one provider-neutral batch embedding request."""
+    provider: EmbeddingProvider | None = app.state.embedding_providers.get(request.provider)
+    if provider is None:
+        raise HTTPException(status_code=422, detail="Requested embedding provider is unavailable")
+    if any(not text.strip() for text in request.texts):
+        raise HTTPException(status_code=422, detail="Embedding text must not be empty")
+    try:
+        result = await provider.embed_texts(request.texts, request.model)
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Embedding provider request failed") from error
+    if len(result.vectors) != len(request.texts) or any(
+        len(vector) != result.dimensions for vector in result.vectors
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail="Embedding provider returned invalid dimensions",
+        )
+    return EmbeddingResponse(**result.__dict__)

@@ -64,7 +64,9 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
 
   for (const node of graph.nodes) {
     if (node.type === 'PROMPT' && 'template' in node.config) {
-      errors.push(...validatePromptTemplate(node.config.template).errors);
+      errors.push(
+        ...validatePromptTemplate(node.config.template, ['input', 'retrieval_context']).errors,
+      );
     }
     if (
       node.type === 'CONDITION' &&

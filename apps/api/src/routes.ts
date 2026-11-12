@@ -5,6 +5,7 @@ import type { DurableQueue } from './queue.js';
 import { validateWorkflowGraph } from './graph.js';
 import type { Store } from './store.js';
 import { validatePromptVersionReferences } from './milestone2-routes.js';
+import { validateKnowledgeSourceReferences } from './knowledge-routes.js';
 
 const idParams = z.object({ projectId: z.string().uuid() });
 const workflowParams = idParams.extend({ workflowId: z.string().uuid() });
@@ -103,10 +104,15 @@ export const registerApiRoutes = async (
       params.data.projectId,
       graph.data,
     );
+    const knowledgeErrors = await validateKnowledgeSourceReferences(
+      store,
+      params.data.projectId,
+      graph.data,
+    );
     const response = {
       ...result,
-      valid: result.valid && promptErrors.length === 0,
-      errors: [...result.errors, ...promptErrors],
+      valid: result.valid && promptErrors.length === 0 && knowledgeErrors.length === 0,
+      errors: [...result.errors, ...promptErrors, ...knowledgeErrors],
     };
     return reply.code(response.valid ? 200 : 422).send(response);
   });
@@ -128,10 +134,16 @@ export const registerApiRoutes = async (
       params.data.projectId,
       graph.data,
     );
-    if (!result.valid || promptErrors.length)
-      return reply
-        .code(422)
-        .send({ error: 'INVALID_WORKFLOW_GRAPH', details: [...result.errors, ...promptErrors] });
+    const knowledgeErrors = await validateKnowledgeSourceReferences(
+      store,
+      params.data.projectId,
+      graph.data,
+    );
+    if (!result.valid || promptErrors.length || knowledgeErrors.length)
+      return reply.code(422).send({
+        error: 'INVALID_WORKFLOW_GRAPH',
+        details: [...result.errors, ...promptErrors, ...knowledgeErrors],
+      });
     const version = await store.createVersion(
       params.data.projectId,
       params.data.workflowId,

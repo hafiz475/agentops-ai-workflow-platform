@@ -8,28 +8,33 @@ import {
   BullDurableQueue,
   RUN_QUEUE_NAME,
   EVALUATION_QUEUE_NAME,
+  KNOWLEDGE_INGESTION_QUEUE_NAME,
   type RunJobData,
   type EvaluationJobData,
+  type KnowledgeIngestionJobData,
   queueConnection,
 } from './queue.js';
 import { PostgresStore } from './store.js';
 import { parseToolSecrets } from './http-tool.js';
+import { KnowledgeIngestionProcessor } from './knowledge.js';
 
 const config = loadConfig();
 const pool = new Pool({ connectionString: config.DATABASE_URL });
 const store = new PostgresStore(pool);
 const producer = new BullDurableQueue(config.REDIS_URL);
+const aiClient = new HttpAiServiceClient(config.AI_SERVICE_URL);
 const log = (level: 'info' | 'error', data: Record<string, unknown>, message: string) =>
   console[level](JSON.stringify({ level, message, ...data, timestamp: new Date().toISOString() }));
 const executor = new RunExecutor(
   store,
-  new HttpAiServiceClient(config.AI_SERVICE_URL),
+  aiClient,
   {
     info: (data, message) => log('info', data, message),
     error: (data, message) => log('error', data, message),
   },
   120_000,
   parseToolSecrets(config.TOOL_SECRETS_JSON),
+  aiClient,
 );
 
 const worker = new Worker<RunJobData>(
@@ -137,6 +142,24 @@ const evaluationWorker = new Worker<EvaluationJobData>(
     maxStalledCount: 2,
   },
 );
+const ingestionProcessor = new KnowledgeIngestionProcessor(store, aiClient, {
+  info: (data, message) => log('info', data, message),
+  error: (data, message) => log('error', data, message),
+});
+const ingestionWorker = new Worker<KnowledgeIngestionJobData>(
+  KNOWLEDGE_INGESTION_QUEUE_NAME,
+  async (job) => ingestionProcessor.process(job.data.documentId),
+  {
+    connection: queueConnection(config.REDIS_URL),
+    concurrency: 2,
+    lockDuration: 180_000,
+    stalledInterval: 30_000,
+    maxStalledCount: 2,
+  },
+);
+ingestionWorker.on('error', (error) =>
+  log('error', { error: error.message }, 'worker.ingestion_error'),
+);
 evaluationWorker.on('error', (error) =>
   log('error', { error: error.message }, 'worker.evaluation_error'),
 );
@@ -151,10 +174,12 @@ for (const run of await store.listRecoverableRuns()) {
     metadata: { job_id: jobId, recovery: true },
   });
 }
+for (const document of await store.listRecoverableKnowledgeDocuments())
+  await producer.enqueueKnowledgeIngestion(document.id);
 log('info', {}, 'worker.ready');
 
 const shutdown = async () => {
-  await Promise.all([worker.close(), evaluationWorker.close()]);
+  await Promise.all([worker.close(), evaluationWorker.close(), ingestionWorker.close()]);
   await producer.close();
   await pool.end();
   process.exit(0);
