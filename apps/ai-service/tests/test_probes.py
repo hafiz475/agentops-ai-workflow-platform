@@ -193,10 +193,7 @@ def test_openai_agent_adapter_uses_structured_action_schema() -> None:
             text = cast(dict[str, Any], kwargs["text"])
             assert cast(dict[str, Any], text["format"])["type"] == "json_schema"
             return SimpleNamespace(
-                output_text=(
-                    '{"type":"FINAL","output":{"text":"done"},'
-                    '"action_summary":"finish"}'
-                ),
+                output_text=('{"type":"FINAL","output":{"text":"done"},"action_summary":"finish"}'),
                 model="gpt-test",
                 usage=SimpleNamespace(input_tokens=4, output_tokens=3),
             )

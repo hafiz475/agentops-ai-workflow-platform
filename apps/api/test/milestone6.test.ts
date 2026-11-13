@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { AgentActionRequest, WorkflowGraph } from '@agentops/contracts';
+import type { AgentActionRequest, AgentActionResponse, WorkflowGraph } from '@agentops/contracts';
+import type { AiServiceClient } from '../src/ai-client.js';
 import { RunExecutor } from '../src/executor.js';
 import { evaluateOutput } from '../src/evaluators.js';
 import { ToolRegistry } from '../src/tool-registry.js';
@@ -51,7 +52,9 @@ const setup = async (g: WorkflowGraph) => {
   });
   return { store, project, version, run };
 };
-const client = (actions: (request: AgentActionRequest) => Record<string, unknown>) => ({
+const client = (
+  actions: (request: AgentActionRequest) => Record<string, unknown>,
+): AiServiceClient => ({
   async ready() {
     return { status: 'ok' as const, service: 'ai', version: '1' };
   },
@@ -66,7 +69,7 @@ const client = (actions: (request: AgentActionRequest) => Record<string, unknown
       latency_ms: 0,
       input_tokens: null,
       output_tokens: null,
-    } as never;
+    } as AgentActionResponse;
   },
 });
 
@@ -314,7 +317,7 @@ describe('Milestone 6 controlled agents', () => {
     if (!agent || agent.type !== 'AGENT') throw new Error();
     agent.config.max_duration_ms = 1000;
     const s = await setup(timed);
-    const slow = client((asyncAction) => ({
+    const slow = client(() => ({
       type: 'FINAL',
       output: { text: 'late' },
       action_summary: 'late',

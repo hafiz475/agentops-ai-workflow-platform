@@ -2,13 +2,14 @@ import {
   agentActionResponseSchema,
   type AgentObservation,
   type AgentToolName,
+  type WorkflowNode,
 } from '@agentops/contracts';
 import type { AiServiceClient, EmbeddingServiceClient } from './ai-client.js';
 import type { RunLogger } from './executor.js';
 import type { Store, ToolCallRecord } from './store.js';
 import { ToolRegistry } from './tool-registry.js';
 
-type AgentNode = Extract<import('@agentops/contracts').WorkflowNode, { type: 'AGENT' }>;
+type AgentNode = Extract<WorkflowNode, { type: 'AGENT' }>;
 export type AgentNodeOutcome =
   { kind: 'COMPLETED'; output: Record<string, unknown> } | { kind: 'WAITING' };
 export class AgentExecutor {
