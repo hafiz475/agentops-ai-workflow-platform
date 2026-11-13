@@ -158,6 +158,24 @@ def main() -> None:
         len(steps) == 2 and steps[0]["toolCall"]["status"] == "COMPLETED",
         "agent tool checkpoints invalid",
     )
+    status, agent_trace = request(
+        "GET", f"/projects/{project_id}/workflows/{workflow_id}/runs/{run_id}/trace"
+    )
+    agent_events = [item["eventType"] for item in agent_trace]  # type: ignore[union-attr]
+    expect(
+        status == 200
+        and all(
+            event in agent_events
+            for event in (
+                "AGENT_STARTED",
+                "AGENT_STEP_STARTED",
+                "TOOL_CALL_PROPOSED",
+                "TOOL_CALL_COMPLETED",
+                "AGENT_COMPLETED",
+            )
+        ),
+        "agent trace timeline incomplete",
+    )
 
     http_plan = json.dumps(
         {
@@ -366,6 +384,14 @@ def main() -> None:
         and len(rag_result["output"]["retrieval_results"]) > 0,
         "RAG regression failed",
     )  # type: ignore[index]
+    status, rag_trace = request(
+        "GET", f"/projects/{project_id}/workflows/{rag_workflow}/runs/{rag_run}/trace"
+    )
+    expect(
+        status == 200
+        and any(item["eventType"] == "RETRIEVAL_COMPLETED" for item in rag_trace),
+        "RAG source trace missing",
+    )  # type: ignore[union-attr]
 
     foreign_status, foreign = request(
         "POST", "/projects", {"name": "M6 foreign project"}
