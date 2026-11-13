@@ -1,6 +1,6 @@
-# Azure VM deployment runbook - Milestone 5
+# Azure VM deployment runbook - Milestone 6
 
-Milestone 5 retains the VM and OIDC pipeline, starts the same six Compose services, and opens no new inbound ports. PostgreSQL now uses `pgvector/pgvector:pg16` so migration 0005 can enable vector storage while preserving the existing volume.
+Milestone 6 retains the VM, OIDC pipeline, same six Compose services, and existing public ports. Migration 0006 adds agent checkpoints and typed agent-tool approvals; no new infrastructure service is introduced.
 
 ## Azure portal settings retained
 
@@ -41,11 +41,14 @@ Then verify the retained and new behaviors:
 2. Pause and resume HUMAN_APPROVAL; confirm the completed LLM NodeRun is not repeated. Reject another approval and confirm cancellation.
 3. Run CONDITION/TRANSFORM and a controlled public HTTP_REQUEST. Confirm the unselected branch is skipped and private/redirect SSRF attempts are blocked.
 4. Create a development-embedding Knowledge Source, upload a synthetic engineering TXT document, and wait for `READY`.
-5. Confirm chunks retain page/order provenance and provider/model metadata; vectors must not be returned.
-6. Run `INPUT -> RETRIEVAL -> PROMPT -> LLM -> OUTPUT` with “What abnormal vibration was found?” Confirm the expected ranked source and retrieval traces.
-7. Confirm controlled context reaches PROMPT, output completes, and `CITATIONS_VALIDATED` contains only retrieved source metadata.
-8. From another project, attempt to reference the source and confirm validation rejects it.
-9. Run Hit@K, Recall@K, and MRR evaluation cases through normal WorkflowRuns.
+5. Create `INPUT -> AGENT -> OUTPUT` using the deterministic provider and allow retrieval plus transform; verify persisted steps, calls, traces, and final output.
+6. Create an HTTP agent flow with `http_request` in `require_approval_for`; verify the worker exits while waiting, approval resumes, and a private destination remains blocked.
+7. Re-run cancellation, RAG, branching/HTTP, `/health`, and `/ready` smoke checks. Never claim OpenAI agent execution unless credentials-backed execution was observed.
+8. Confirm chunks retain page/order provenance and provider/model metadata; vectors must not be returned.
+9. Run `INPUT -> RETRIEVAL -> PROMPT -> LLM -> OUTPUT` with “What abnormal vibration was found?” Confirm the expected ranked source and retrieval traces.
+10. Confirm controlled context reaches PROMPT, output completes, and `CITATIONS_VALIDATED` contains only retrieved source metadata.
+11. From another project, attempt to reference the source and confirm validation rejects it.
+12. Run Hit@K, Recall@K, and MRR evaluation cases through normal WorkflowRuns.
 
 If `AI_OPENAI_API_KEY` is absent, use `development` / `development-hash-v1`. Do not claim OpenAI embedding execution unless it was actually observed. Optional OpenAI sources use `AI_OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`).
 

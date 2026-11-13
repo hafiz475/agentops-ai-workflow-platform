@@ -104,4 +104,49 @@ describe('workflow editor state', () => {
       /1 citations validated/,
     );
   });
+  it('adds bounded AGENT nodes and summarizes its safe timeline', () => {
+    const agent = createWorkflowNode('AGENT', 0, 'agent');
+    assert.deepEqual(agent.data.config, {
+      model: 'development-agent-v1',
+      allowed_tools: ['retrieval', 'transform'],
+      max_steps: 5,
+      max_duration_ms: 60000,
+      max_tool_calls: 5,
+      max_total_tokens: 10000,
+      require_approval_for: [],
+    });
+    assert.match(
+      traceSummary({
+        eventType: 'TOOL_CALL_COMPLETED',
+        metadata: { step_number: 2, tool_name: 'transform' },
+      }),
+      /step 2.*transform/,
+    );
+    assert.match(
+      traceSummary({ eventType: 'AGENT_LIMIT_REACHED', metadata: { reason: 'MAX_STEPS' } }),
+      /MAX_STEPS/,
+    );
+    assert.match(
+      traceSummary({
+        eventType: 'AGENT_WAITING_FOR_APPROVAL',
+        metadata: { step_number: 2, tool_name: 'http_request' },
+      }),
+      /step 2.*http_request/,
+    );
+    assert.match(
+      traceSummary({
+        eventType: 'AGENT_RESUMED',
+        metadata: { step_number: 2, reason: 'APPROVED' },
+      }),
+      /APPROVED/,
+    );
+    assert.match(
+      traceSummary({ eventType: 'AGENT_COMPLETED', metadata: { status: 'COMPLETED' } }),
+      /COMPLETED/,
+    );
+    assert.match(
+      traceSummary({ eventType: 'AGENT_FAILED', metadata: { message: 'provider failed' } }),
+      /provider failed/,
+    );
+  });
 });

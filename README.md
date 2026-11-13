@@ -1,6 +1,6 @@
 # AgentOps Studio
 
-A production-style AI workflow and observability platform. Milestone 5 adds reusable Knowledge Sources, embeddings, retrieval, grounded RAG context, citation traces, and retrieval evaluation without changing the durable M3/M4 executor architecture.
+A production-style AI workflow and observability platform. Milestone 6 adds controlled, bounded agentic execution without changing the durable M3-M5 worker architecture.
 
 ## Implemented
 
@@ -11,6 +11,10 @@ A production-style AI workflow and observability platform. Milestone 5 adds reus
 - Deterministic chunking, provider-neutral development/OpenAI embeddings, and PostgreSQL `pgvector` storage
 - A reusable `RETRIEVAL` node with ranked provenance, document filters, and cosine-similarity scores
 - Controlled RAG prompt context, validated citations, inspectable source traces, and retrieval evaluation
+- Controlled `AGENT` nodes with strict structured actions, explicit tool allowlists, hard step/tool/duration limits, and persisted timelines
+- A typed Tool Registry that wraps existing retrieval, SSRF-safe HTTP, and deterministic transform capabilities
+- Sensitive agent-tool approval using the existing non-blocking ApprovalRequest pause/resume lifecycle
+- Durable AgentExecution, AgentStep, and ToolCall checkpoints with cancellation, recovery, safe retry feedback, and agent evaluators
 - Mutable drafts with immutable WorkflowVersions and PromptVersions
 - Project-scoped Fastify APIs and PostgreSQL persistence
 - BullMQ queues persisted in Redis; the API never performs production execution
@@ -39,6 +43,7 @@ flowchart LR
   Worker -->|LLM and embedding providers| AI[FastAPI AI service]
   Worker --> Queue
   Worker -->|validated public HTTP only| External[External HTTP service]
+  Worker -->|strict structured actions| AI
   DB --> Vector[(pgvector embeddings)]
   AI --> Provider[Development or OpenAI]
 ```
@@ -84,6 +89,16 @@ Open `http://localhost:3000`; API health/readiness are on port `3001`. The AI se
 6. Citation validation rejects references outside the retrieved set and persists retrieved/cited provenance plus `CITATIONS_VALIDATED`.
 7. `RETRIEVAL_HIT_AT_K`, `RETRIEVAL_RECALL_AT_K`, `RETRIEVAL_MRR`, and deterministic citation checks reuse normal evaluation WorkflowRuns.
 
+## Milestone 6 controlled-agent flow
+
+1. `AGENT` runs inside the existing BullMQ worker and calls the provider-neutral `/v1/agent/action` boundary for either a strict `TOOL_CALL` or `FINAL` action.
+2. Only `retrieval`, `http_request`, and `transform` registry entries can be allowlisted. Returned names and arguments are schema-validated before dispatch.
+3. Each AgentExecution, AgentStep, and ToolCall is persisted. Resume loads completed observations and never restarts at step one.
+4. Sensitive calls create an `AGENT_TOOL` ApprovalRequest, persist redacted context, mark the run waiting, and return the worker job. Approval queues a resume; rejection becomes a structured observation so a bounded fallback can finish.
+5. Step, tool-call, active-duration, and provider-reported token bounds terminate as `LIMIT_REACHED`. Token accounting is partial when a provider supplies no usage metadata.
+6. Tool failures become bounded structured observations. Existing worker retries remain reserved for transient infrastructure/provider delivery failures.
+7. The platform never asks for or stores hidden chain-of-thought; it persists only action type, selected tool, safe arguments, concise summary, result, status, and usage metadata.
+
 ## HTTP tool security and secrets
 
 `HTTP_REQUEST` supports GET, POST, PUT, and PATCH. Redirects are manual, limited to three, and cross-origin redirects are rejected so credentials cannot move to another host. Every target is DNS-validated before the request. GET may participate in bounded transient retries. POST/PUT/PATCH are not retried unless `retry_non_idempotent` is enabled and `idempotency_key_header` is configured; this reduces duplicate side effects but does not guarantee exactly-once behavior.
@@ -100,12 +115,14 @@ Secrets are injected only into the worker through `TOOL_SECRETS_JSON`, shaped as
 - `/api/v1/projects/:projectId/evaluation-runs`
 - `POST|GET /api/v1/projects/:projectId/knowledge-sources`
 - `POST|GET /api/v1/projects/:projectId/knowledge-sources/:sourceId/documents`
+- `GET /api/v1/projects/:projectId/workflows/:workflowId/runs/:runId/agent-executions`
 
 ## Known limitations
 
-The demo has no production authentication, so approval decisions deliberately use the label `demo-reviewer`, not a fabricated identity. Workflows still reject merge nodes (every non-INPUT node has one parent), loops, and cycles. Ingestion accepts only small TXT/PDF/DOCX files and stores upload bytes in PostgreSQL; it is not a large-scale document pipeline. Prompt injection from retrieved text is reduced through deterministic delimiters and instruction/data separation but cannot be eliminated. The OpenAI embedding adapter is optional and requires credentials; development embeddings are deterministic but not semantic-quality embeddings. DNS validation cannot guarantee immunity from every rebinding race, cancellation remains cooperative, and the single Azure VM is not highly available. Controlled agentic workflows and production authentication/hardening remain planned.
+The demo has no production authentication, so approval decisions use `demo-reviewer`. Workflows reject merges, cycles, recursive agents, arbitrary tools, shell/code/filesystem access, and multi-agent spawning. Prompt injection from retrieved/tool content is reduced through instruction/data separation but cannot be eliminated. Provider token limits are enforced only when usage metadata is returned. HTTP checkpointing prevents replay after a persisted result but cannot guarantee exactly-once effects across the external-call crash window. Cancellation is cooperative, OpenAI execution requires credentials, and the single Azure VM is not highly available.
 
 ## Planned
 
-- Controlled agentic workflows
-- Production authentication and hardening
+- Production authentication and RBAC
+- Multi-tenant and secrets-management hardening
+- OpenTelemetry, metrics, alerts, backup/restore, TLS/domain, and a managed-cloud migration path

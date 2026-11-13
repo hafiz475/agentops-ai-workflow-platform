@@ -9,6 +9,10 @@ import {
   type EmbeddingRequest,
   type EmbeddingResponse,
   type ServiceStatus,
+  agentActionRequestSchema,
+  agentActionResponseSchema,
+  type AgentActionRequest,
+  type AgentActionResponse,
 } from '@agentops/contracts';
 
 export class TransientAiError extends Error {}
@@ -16,6 +20,7 @@ export class TransientEmbeddingError extends Error {}
 export interface AiServiceClient {
   ready(): Promise<ServiceStatus>;
   generate(request: GenerateRequest): Promise<GenerateResponse>;
+  selectAgentAction?(request: AgentActionRequest): Promise<AgentActionResponse>;
 }
 export interface EmbeddingServiceClient {
   embedTexts(request: EmbeddingRequest): Promise<EmbeddingResponse>;
@@ -52,6 +57,24 @@ export class HttpAiServiceClient implements AiServiceClient, EmbeddingServiceCli
       throw new TransientAiError(`AI provider request failed with HTTP ${response.status}`);
     if (!response.ok) throw new Error(`AI provider request failed with HTTP ${response.status}`);
     return generateResponseSchema.parse(await response.json());
+  }
+  public async selectAgentAction(input: AgentActionRequest): Promise<AgentActionResponse> {
+    const request = agentActionRequestSchema.parse(input);
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/agent/action`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (error) {
+      throw new TransientAiError(error instanceof Error ? error.message : 'Agent provider failed.');
+    }
+    if (response.status >= 500 || response.status === 429)
+      throw new TransientAiError(`Agent provider failed with HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`Agent provider failed with HTTP ${response.status}`);
+    return agentActionResponseSchema.parse(await response.json());
   }
   public async embedTexts(input: EmbeddingRequest): Promise<EmbeddingResponse> {
     const request = embeddingRequestSchema.parse(input);

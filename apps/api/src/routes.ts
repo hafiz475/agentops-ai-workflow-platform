@@ -271,6 +271,33 @@ export const registerApiRoutes = async (
       return trace ?? reply.code(404).send({ error: 'RUN_NOT_FOUND' });
     },
   );
+  app.get(
+    '/api/v1/projects/:projectId/workflows/:workflowId/runs/:runId/agent-executions',
+    async (request, reply) => {
+      const params = runParams.safeParse(request.params);
+      if (!params.success) return reply.code(400).send(validationError(params.error));
+      const run = await store.getRun(
+        params.data.projectId,
+        params.data.workflowId,
+        params.data.runId,
+      );
+      if (!run) return reply.code(404).send({ error: 'RUN_NOT_FOUND' });
+      const result = [];
+      for (const nodeRun of await store.listNodeRuns(run.id)) {
+        if (nodeRun.nodeType !== 'AGENT') continue;
+        const execution = await store.getAgentExecution(nodeRun.id);
+        if (!execution) continue;
+        const steps = await store.listAgentSteps(execution.id);
+        result.push({
+          ...execution,
+          steps: await Promise.all(
+            steps.map(async (step) => ({ ...step, toolCall: await store.getToolCall(step.id) })),
+          ),
+        });
+      }
+      return result;
+    },
+  );
   app.post(
     '/api/v1/projects/:projectId/workflows/:workflowId/runs/:runId/cancel',
     async (request, reply) => {
@@ -312,6 +339,33 @@ export const registerApiRoutes = async (
             status: 'CANCELLED',
             completedAt: new Date().toISOString(),
           });
+          const agent = await store.getAgentExecution(approval.nodeRunId);
+          if (agent) {
+            await store.updateAgentExecution(agent.id, {
+              status: 'CANCELLED',
+              completedAt: new Date().toISOString(),
+            });
+            for (const step of await store.listAgentSteps(agent.id)) {
+              if (['RUNNING', 'WAITING_FOR_APPROVAL'].includes(step.status)) {
+                await store.updateAgentStep(step.id, {
+                  status: 'CANCELLED',
+                  completedAt: new Date().toISOString(),
+                });
+                const call = await store.getToolCall(step.id);
+                if (call)
+                  await store.updateToolCall(call.id, {
+                    status: 'CANCELLED',
+                    completedAt: new Date().toISOString(),
+                  });
+              }
+            }
+            await store.addTrace({
+              runId: run.id,
+              nodeRunId: approval.nodeRunId,
+              eventType: 'AGENT_CANCELLED',
+              metadata: { reason },
+            });
+          }
         }
         await store.addTrace({
           runId: run.id,
@@ -376,7 +430,7 @@ export const registerApiRoutes = async (
           eventType: decision === 'approve' ? 'APPROVAL_APPROVED' : 'APPROVAL_REJECTED',
           metadata: { approval_id: approval.id, reason: approval.reason },
         });
-        if (decision === 'reject') {
+        if (decision === 'reject' && approval.approvalType === 'HUMAN_NODE') {
           await store.updateNodeRun(current.nodeRunId, {
             status: 'CANCELLED',
             completedAt: new Date().toISOString(),
@@ -407,7 +461,7 @@ export const registerApiRoutes = async (
             await store.updateRun(run.id, {
               status: 'FAILED',
               errorCode: 'QUEUE_UNAVAILABLE',
-              errorMessage: 'Approved run could not be resumed.',
+              errorMessage: 'Reviewed run could not be resumed.',
               completedAt: new Date().toISOString(),
             });
             await store.addTrace({

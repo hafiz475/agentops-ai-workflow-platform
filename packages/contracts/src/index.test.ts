@@ -6,6 +6,7 @@ import {
   generateResponseSchema,
   serviceStatusSchema,
   workflowGraphSchema,
+  agentActionResponseSchema,
 } from './index.js';
 
 describe('contracts', () => {
@@ -171,5 +172,76 @@ describe('contracts', () => {
       input_tokens: null,
     });
     assert.equal(embedding.dimensions, 2);
+  });
+  it('validates bounded Milestone 6 agents and strict structured actions', () => {
+    const graph = workflowGraphSchema.parse({
+      nodes: [
+        {
+          id: 'agent',
+          type: 'AGENT',
+          version: 1,
+          position: { x: 0, y: 0 },
+          config: {
+            model: 'development-agent-v1',
+            allowed_tools: ['retrieval', 'transform'],
+            max_steps: 5,
+            max_duration_ms: 60000,
+            max_tool_calls: 5,
+            max_total_tokens: 10000,
+            require_approval_for: [],
+          },
+        },
+      ],
+      edges: [],
+    });
+    assert.equal(graph.nodes[0]?.type, 'AGENT');
+    assert.throws(() =>
+      workflowGraphSchema.parse({
+        nodes: [
+          {
+            id: 'agent',
+            type: 'AGENT',
+            version: 1,
+            position: { x: 0, y: 0 },
+            config: {
+              model: 'dev',
+              allowed_tools: ['transform'],
+              max_steps: 11,
+              max_duration_ms: 60000,
+              max_tool_calls: 5,
+              max_total_tokens: 10000,
+              require_approval_for: [],
+            },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    assert.equal(
+      agentActionResponseSchema.parse({
+        action: {
+          type: 'TOOL_CALL',
+          tool_name: 'transform',
+          arguments: { template: { text: 'ok' } },
+          action_summary: 'transform safely',
+        },
+        provider: 'development',
+        model: 'dev',
+        latency_ms: 0,
+        input_tokens: null,
+        output_tokens: null,
+      }).action.type,
+      'TOOL_CALL',
+    );
+    assert.throws(() =>
+      agentActionResponseSchema.parse({
+        action: { type: 'SHELL', command: 'whoami' },
+        provider: 'development',
+        model: 'dev',
+        latency_ms: 0,
+        input_tokens: null,
+        output_tokens: null,
+      }),
+    );
   });
 });

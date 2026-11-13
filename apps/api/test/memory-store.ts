@@ -19,6 +19,9 @@ import type {
   KnowledgeDocumentRecord,
   KnowledgeChunkRecord,
   CitationValidationRecord,
+  AgentExecutionRecord,
+  AgentStepRecord,
+  ToolCallRecord,
 } from '../src/store.js';
 
 const now = () => new Date().toISOString();
@@ -44,6 +47,9 @@ export class MemoryStore implements Store {
     { embedding: number[]; provider: string; model: string; dimensions: number }
   >();
   public citationValidations: CitationValidationRecord[] = [];
+  public agentExecutions: AgentExecutionRecord[] = [];
+  public agentSteps: AgentStepRecord[] = [];
+  public toolCalls: ToolCallRecord[] = [];
   async createProject(input: { name: string; description: string | null }) {
     const item = { id: randomUUID(), ...input, createdAt: now(), updatedAt: now() };
     this.projects.push(item);
@@ -218,8 +224,15 @@ export class MemoryStore implements Store {
     nodeRunId: string;
     title: string;
     instructions: string;
+    approvalType?: 'HUMAN_NODE' | 'AGENT_TOOL';
+    toolCallId?: string;
+    safeContext?: Record<string, unknown>;
   }) {
-    const existing = this.approvals.find((item) => item.nodeRunId === input.nodeRunId);
+    const existing = this.approvals.find((item) =>
+      input.toolCallId
+        ? item.toolCallId === input.toolCallId
+        : item.nodeRunId === input.nodeRunId && item.approvalType === 'HUMAN_NODE',
+    );
     if (existing) return existing;
     const item: ApprovalRequestRecord = {
       id: randomUUID(),
@@ -233,6 +246,9 @@ export class MemoryStore implements Store {
       reason: null,
       createdAt: now(),
       updatedAt: now(),
+      approvalType: input.approvalType ?? 'HUMAN_NODE',
+      toolCallId: input.toolCallId ?? null,
+      safeContext: input.safeContext ?? {},
     };
     this.approvals.push(item);
     return item;
@@ -268,6 +284,108 @@ export class MemoryStore implements Store {
       updatedAt: now(),
     });
     return item;
+  }
+  async createAgentExecution(input: {
+    projectId: string;
+    runId: string;
+    nodeRunId: string;
+    model: string;
+    maxSteps: number;
+    maxDurationMs: number;
+    maxToolCalls: number;
+    maxTotalTokens: number;
+  }) {
+    const found = this.agentExecutions.find((x) => x.nodeRunId === input.nodeRunId);
+    if (found) return found;
+    const item: AgentExecutionRecord = {
+      id: randomUUID(),
+      ...input,
+      status: 'RUNNING',
+      stepsUsed: 0,
+      toolCallsUsed: 0,
+      totalTokens: 0,
+      activeDurationMs: 0,
+      limitReason: null,
+      startedAt: now(),
+      completedAt: null,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.agentExecutions.push(item);
+    return item;
+  }
+  async getAgentExecution(nodeRunId: string) {
+    return this.agentExecutions.find((x) => x.nodeRunId === nodeRunId) ?? null;
+  }
+  async updateAgentExecution(id: string, patch: Partial<AgentExecutionRecord>) {
+    const x = this.agentExecutions.find((v) => v.id === id);
+    if (x) Object.assign(x, patch, { updatedAt: now() });
+  }
+  async createAgentStep(input: {
+    agentExecutionId: string;
+    stepNumber: number;
+    input: Record<string, unknown>;
+  }) {
+    const found = this.agentSteps.find(
+      (x) => x.agentExecutionId === input.agentExecutionId && x.stepNumber === input.stepNumber,
+    );
+    if (found) return found;
+    const item: AgentStepRecord = {
+      id: randomUUID(),
+      ...input,
+      actionType: null,
+      toolName: null,
+      actionSummary: null,
+      output: null,
+      status: 'RUNNING',
+      inputTokens: null,
+      outputTokens: null,
+      latencyMs: null,
+      startedAt: now(),
+      completedAt: null,
+      createdAt: now(),
+    };
+    this.agentSteps.push(item);
+    return item;
+  }
+  async listAgentSteps(agentExecutionId: string) {
+    return this.agentSteps
+      .filter((x) => x.agentExecutionId === agentExecutionId)
+      .sort((a, b) => a.stepNumber - b.stepNumber);
+  }
+  async updateAgentStep(id: string, patch: Partial<AgentStepRecord>) {
+    const x = this.agentSteps.find((v) => v.id === id);
+    if (x) Object.assign(x, patch);
+  }
+  async createToolCall(input: {
+    agentStepId: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    approvalRequired: boolean;
+  }) {
+    const found = this.toolCalls.find((x) => x.agentStepId === input.agentStepId);
+    if (found) return found;
+    const item: ToolCallRecord = {
+      id: randomUUID(),
+      ...input,
+      result: null,
+      status: 'PROPOSED',
+      approvalRequestId: null,
+      errorCode: null,
+      errorMessage: null,
+      startedAt: null,
+      completedAt: null,
+      createdAt: now(),
+    };
+    this.toolCalls.push(item);
+    return item;
+  }
+  async getToolCall(agentStepId: string) {
+    return this.toolCalls.find((x) => x.agentStepId === agentStepId) ?? null;
+  }
+  async updateToolCall(id: string, patch: Partial<ToolCallRecord>) {
+    const x = this.toolCalls.find((v) => v.id === id);
+    if (x) Object.assign(x, patch);
   }
   async addTrace(input: {
     runId: string;

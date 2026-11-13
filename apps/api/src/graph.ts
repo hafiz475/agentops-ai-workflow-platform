@@ -59,8 +59,13 @@ export const validateWorkflowGraph = (input: unknown): GraphValidationResult => 
   if (nodeIds.size !== graph.nodes.length) errors.push('Node IDs must be unique.');
   if (countType(graph.nodes, 'INPUT') !== 1) errors.push('Exactly one INPUT node is required.');
   if (countType(graph.nodes, 'OUTPUT') < 1) errors.push('At least one OUTPUT node is required.');
-  if (countType(graph.nodes, 'PROMPT') < 1) errors.push('At least one PROMPT node is required.');
-  if (countType(graph.nodes, 'LLM') !== 1) errors.push('Exactly one LLM node is required.');
+  const agentCount = countType(graph.nodes, 'AGENT');
+  if (agentCount > 1) errors.push('At most one AGENT node is supported per workflow.');
+  if (agentCount === 0) {
+    if (countType(graph.nodes, 'PROMPT') < 1) errors.push('At least one PROMPT node is required.');
+    if (countType(graph.nodes, 'LLM') !== 1) errors.push('Exactly one LLM node is required.');
+  } else if (countType(graph.nodes, 'LLM') > 1)
+    errors.push('At most one LLM node is supported with AGENT.');
 
   for (const node of graph.nodes) {
     if (node.type === 'PROMPT' && 'template' in node.config) {

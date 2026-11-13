@@ -38,7 +38,13 @@ export function ApprovalsPage({ projectId }: { projectId: string }) {
           <article className="project-card" key={approval.id}>
             <span>{approval.status}</span>
             <strong>{approval.title}</strong>
+            <span>
+              {approval.approvalType === 'AGENT_TOOL' ? 'Agent Tool Approval' : 'Workflow Approval'}
+            </span>
             <p>{approval.instructions}</p>
+            {approval.approvalType === 'AGENT_TOOL' && (
+              <pre>{JSON.stringify(approval.safeContext, null, 2)}</pre>
+            )}
             <small>
               Run {approval.runId}
               <br />

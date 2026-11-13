@@ -5,12 +5,9 @@ import { renderPrompt, validateWorkflowGraph } from './graph.js';
 import type { RunRecord, Store, WorkflowVersionRecord } from './store.js';
 import { executeHttpRequest, HttpToolBlockedError, HttpToolTransientError } from './http-tool.js';
 import { evaluateCondition, readPath, renderStructuredValue } from './tool-values.js';
-import {
-  rankRetrievalResults,
-  renderRetrievalContext,
-  validateCitations,
-  type RankedRetrievalResult,
-} from './retrieval.js';
+import { validateCitations, type RankedRetrievalResult } from './retrieval.js';
+import { executeRetrieval } from './retrieval-tool.js';
+import { AgentExecutor } from './agent-executor.js';
 
 export interface RunLogger {
   info(data: Record<string, unknown>, message: string): void;
@@ -50,12 +47,15 @@ export class RunExecutor {
     const started = Date.now();
     const existingNodeRuns = await this.store.listNodeRuns(run.id);
     const waitingApprovalNode = existingNodeRuns.find(
-      (nodeRun) => nodeRun.nodeType === 'HUMAN_APPROVAL' && nodeRun.status === 'WAITING',
+      (nodeRun) =>
+        ['HUMAN_APPROVAL', 'AGENT'].includes(nodeRun.nodeType) && nodeRun.status === 'WAITING',
     );
     const waitingApproval = waitingApprovalNode
       ? await this.store.getApprovalForNodeRun(waitingApprovalNode.id)
       : null;
-    const isResume = waitingApproval?.status === 'APPROVED';
+    const isResume =
+      waitingApproval?.status === 'APPROVED' ||
+      (waitingApprovalNode?.nodeType === 'AGENT' && waitingApproval?.status === 'REJECTED');
     const priorStatus = current.status;
     await this.store.updateRun(run.id, {
       status: 'RUNNING',
@@ -134,6 +134,27 @@ export class RunExecutor {
           }
         }
 
+        if (node.type === 'AGENT' && nodeRun?.status === 'WAITING') {
+          active = { id: nodeRun.id, node };
+          const outcome = await new AgentExecutor(
+            this.store,
+            this.aiClient,
+            this.logger,
+            this.embeddings,
+            this.toolSecrets,
+          ).execute(node, nodeRun.input ?? value, run.id, nodeRun.id, run.projectId);
+          if (outcome.kind === 'WAITING') return 'WAITING_FOR_APPROVAL';
+          value = outcome.output;
+          await this.store.updateNodeRun(nodeRun.id, {
+            status: 'COMPLETED',
+            output: value,
+            completedAt: new Date().toISOString(),
+          });
+          active = null;
+          nodeId = await this.nextNode(version.graph, node, value, run.id);
+          continue;
+        }
+
         nodeRun = await this.store.createNodeRun({
           runId: run.id,
           nodeId: node.id,
@@ -179,7 +200,21 @@ export class RunExecutor {
           return 'WAITING_FOR_APPROVAL';
         }
 
-        value = await this.executeNode(node, value, run.id, nodeRun.id, run.projectId);
+        if (node.type === 'AGENT') {
+          const outcome = await new AgentExecutor(
+            this.store,
+            this.aiClient,
+            this.logger,
+            this.embeddings,
+            this.toolSecrets,
+          ).execute(node, value, run.id, nodeRun.id, run.projectId);
+          if (outcome.kind === 'WAITING') {
+            await this.store.updateNodeRun(nodeRun.id, { status: 'WAITING' });
+            await this.store.updateRun(run.id, { status: 'WAITING_FOR_APPROVAL' });
+            return 'WAITING_FOR_APPROVAL';
+          }
+          value = outcome.output;
+        } else value = await this.executeNode(node, value, run.id, nodeRun.id, run.projectId);
         await this.store.updateNodeRun(nodeRun.id, {
           status: 'COMPLETED',
           output: value,
@@ -220,6 +255,25 @@ export class RunExecutor {
         throw new TransientExecutionError(message);
       }
       if (active) {
+        if (active.node.type === 'AGENT') {
+          const agent = await this.store.getAgentExecution(active.id);
+          if (agent) {
+            await this.store.updateAgentExecution(agent.id, {
+              status: 'FAILED',
+              completedAt: new Date().toISOString(),
+            });
+            await this.store.addTrace({
+              runId: run.id,
+              nodeRunId: active.id,
+              eventType: 'AGENT_FAILED',
+              metadata: { message },
+            });
+            this.logger.error(
+              { ...context, node_id: active.node.id, agent_execution_id: agent.id },
+              'agent.failed',
+            );
+          }
+        }
         await this.store.updateNodeRun(active.id, {
           status: 'FAILED',
           errorCode: 'NODE_EXECUTION_FAILED',
@@ -238,7 +292,7 @@ export class RunExecutor {
   }
 
   private async executeNode(
-    node: Exclude<WorkflowNode, { type: 'HUMAN_APPROVAL' }>,
+    node: Exclude<WorkflowNode, { type: 'HUMAN_APPROVAL' } | { type: 'AGENT' }>,
     input: Record<string, unknown>,
     runId: string,
     nodeRunId: string,
@@ -254,109 +308,24 @@ export class RunExecutor {
         if (typeof query !== 'string' || !query.trim())
           throw new Error(`RETRIEVAL query path ${node.config.query_path} must resolve to text.`);
         if (!this.embeddings) throw new Error('Embedding service is unavailable.');
-        const source = await this.store.getKnowledgeSource(
-          projectId,
-          node.config.knowledge_source_id,
-        );
-        if (!source) throw new Error('KnowledgeSource is unavailable in this workflow project.');
-        if (!source.embeddingDimensions)
-          throw new Error('KnowledgeSource has no ready embeddings.');
-        const started = Date.now();
-        const traceBase = {
-          knowledge_source_id: source.id,
-          query_length: query.length,
-          top_k: node.config.top_k,
-          embedding_provider: source.embeddingProvider,
-          embedding_model: source.embeddingModel,
-        };
-        await this.store.addTrace({
-          runId,
-          nodeRunId,
-          eventType: 'RETRIEVAL_STARTED',
-          metadata: traceBase,
-        });
-        this.logger.info(
-          { project_id: projectId, run_id: runId, node_id: node.id, ...traceBase },
-          'retrieval.started',
-        );
         try {
-          const embedded = await this.embeddings.embedQuery({
-            query: query.trim(),
-            provider: source.embeddingProvider,
-            model: source.embeddingModel,
-          });
-          if (
-            embedded.provider !== source.embeddingProvider ||
-            embedded.model !== source.embeddingModel ||
-            embedded.dimensions !== source.embeddingDimensions
-          )
-            throw new Error('Query embedding is incompatible with the KnowledgeSource.');
-          const queryEmbedding = embedded.vectors[0];
-          if (!queryEmbedding) throw new Error('Embedding provider returned no query vector.');
-          const records = await this.store.searchKnowledgeChunks({
-            projectId,
-            sourceId: source.id,
-            provider: embedded.provider,
-            model: embedded.model,
-            dimensions: embedded.dimensions,
-            queryEmbedding,
-            topK: node.config.top_k,
-            ...(node.config.document_id ? { documentId: node.config.document_id } : {}),
-          });
-          const results = rankRetrievalResults(records);
-          const sourceMetadata = results.map((result) => ({
-            rank: result.rank,
-            chunk_id: result.chunk_id,
-            document_id: result.document_id,
-            page_number: result.page_number,
-            filename: result.source.filename,
-            score: result.score,
-            score_type: result.score_type,
-          }));
-          const latencyMs = Date.now() - started;
-          await this.store.addTrace({
-            runId,
-            nodeRunId,
-            eventType: 'RETRIEVAL_COMPLETED',
-            metadata: {
-              ...traceBase,
-              result_count: results.length,
-              latency_ms: latencyMs,
-              results: sourceMetadata,
-            },
-          });
-          this.logger.info(
-            {
-              project_id: projectId,
-              run_id: runId,
-              node_id: node.id,
-              result_count: results.length,
-              latency_ms: latencyMs,
-            },
-            'retrieval.completed',
-          );
           return {
             ...input,
-            query: query.trim(),
-            retrieval_results: results,
-            retrieved_chunk_ids: results.map((result) => result.chunk_id),
-            retrieval_context: renderRetrievalContext(results),
+            ...(await executeRetrieval({
+              knowledgeSourceId: node.config.knowledge_source_id,
+              query,
+              topK: node.config.top_k,
+              ...(node.config.document_id ? { documentId: node.config.document_id } : {}),
+              projectId,
+              runId,
+              nodeRunId,
+              nodeId: node.id,
+              store: this.store,
+              embeddings: this.embeddings,
+              logger: this.logger,
+            })),
           };
         } catch (error) {
-          await this.store.addTrace({
-            runId,
-            nodeRunId,
-            eventType: 'RETRIEVAL_FAILED',
-            metadata: {
-              ...traceBase,
-              latency_ms: Date.now() - started,
-              reason: error instanceof Error ? error.message : 'Retrieval failed.',
-            },
-          });
-          this.logger.error(
-            { project_id: projectId, run_id: runId, node_id: node.id },
-            'retrieval.failed',
-          );
           if (error instanceof TransientEmbeddingError)
             throw new TransientExecutionError(error.message);
           throw error;
@@ -562,6 +531,7 @@ export class RunExecutor {
           ...(Array.isArray(input.retrieval_results)
             ? { retrieval_results: input.retrieval_results }
             : {}),
+          ...(input.agent && typeof input.agent === 'object' ? { agent: input.agent } : {}),
         };
     }
   }

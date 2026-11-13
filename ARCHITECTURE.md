@@ -1,6 +1,6 @@
 # AgentOps Studio Architecture
 
-## Milestone 5 system
+## Milestone 6 system
 
 ```mermaid
 flowchart TB
@@ -23,7 +23,17 @@ The web client edits/version workflows and prompts, launches runs/evaluations, p
 
 The API validates project-scoped resources, persists commands, enqueues minimal identifiers, and returns. In production it does not own a long-running execution promise. PostgreSQL is authoritative; Redis contains delivery state, not workflow graphs or secrets.
 
-The worker consumes run, evaluation, and knowledge-ingestion queues, reloads authoritative state from PostgreSQL, runs the shared `RunExecutor`, checkpoints NodeRuns/traces, and schedules retries/resumes. Python remains provider-only for generation and embeddings.
+The worker consumes run, evaluation, and knowledge-ingestion queues, reloads authoritative state from PostgreSQL, runs the shared `RunExecutor`, checkpoints NodeRuns/traces, and schedules retries/resumes. `AGENT` is a normal executor node; it does not create another workflow engine. Python remains provider-only for generation, embeddings, and one strict structured agent action at a time.
+
+## Controlled agents and Tool Registry
+
+AgentExecution owns bounded status and counters; AgentStep stores a structured action and concise summary; ToolCall stores validated safe arguments, approval linkage, and result. Unique `(agent_execution_id, step_number)` and one ToolCall per step make duplicate queue delivery resume from checkpoints. Completed calls are reused. External HTTP has an unavoidable crash window between a remote side effect and local checkpoint, so exactly-once effects are not claimed.
+
+The Tool Registry exposes only `retrieval`, `http_request`, and `transform`. These adapters reuse M5 project-scoped vector search, M4 SSRF/DNS/redirect/timeout/size/secret/retry controls, and M4 structured transforms. No executable code or arbitrary model-selected name is accepted. Tool observations and retrieved text are explicitly treated as untrusted data.
+
+Agent actions are `TOOL_CALL` or `FINAL` JSON validated at both the Python and Node boundaries. The platform does not request or persist hidden reasoning. Hard maximums are 10 steps, 10 tool calls, and 120 seconds of active agent time. Provider-reported usage supports a token budget; missing token metadata is recorded honestly rather than estimated.
+
+Sensitive calls reuse ApprovalRequest with type `AGENT_TOOL`. The worker persists the proposed call and redacted context, marks the node/run waiting, and exits. Approval or rejection queues a resume. Rejection is a structured observation and may lead to a fallback within the remaining budget. Cancellation updates the run, agent, active step, call, and approval state.
 
 ## Knowledge ingestion and vector storage
 
@@ -73,4 +83,4 @@ Compose exposes only web `3000` and API `3001`. Worker, AI `8000`, PostgreSQL `5
 
 ## Explicitly out of scope
 
-Agent/tool selection, autonomous loops, planner/executor systems, multi-agent systems, complex joins, arbitrary code tools, billing, and production authentication/hardening.
+Unrestricted autonomy, recursive or multi-agent systems, arbitrary tools, shell/code/filesystem/browser execution, complex joins, billing, and production authentication/hardening.

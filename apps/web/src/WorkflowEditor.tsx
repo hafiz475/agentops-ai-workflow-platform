@@ -37,6 +37,7 @@ const nodeLabels: Record<NodeType, string> = {
   TRANSFORM: 'Structured transform',
   HTTP_REQUEST: 'Safe HTTP request',
   RETRIEVAL: 'Ranked knowledge retrieval',
+  AGENT: 'Controlled bounded agent',
   OUTPUT: 'Final output',
 };
 
@@ -90,7 +91,17 @@ export const createWorkflowNode = (
                   }
                 : nodeType === 'RETRIEVAL'
                   ? { knowledge_source_id: '', query_path: 'input', top_k: 5 }
-                  : {};
+                  : nodeType === 'AGENT'
+                    ? {
+                        model: 'development-agent-v1',
+                        allowed_tools: ['retrieval', 'transform'],
+                        max_steps: 5,
+                        max_duration_ms: 60000,
+                        max_tool_calls: 5,
+                        max_total_tokens: 10000,
+                        require_approval_for: [],
+                      }
+                    : {};
   return {
     id,
     type: 'workflow',
@@ -125,6 +136,18 @@ export const traceSummary = (event: { eventType: string; metadata: Record<string
   if (event.eventType === 'RETRIEVAL_FAILED') return String(event.metadata.reason ?? 'failed');
   if (event.eventType === 'CITATIONS_VALIDATED')
     return `${Array.isArray(event.metadata.cited_chunk_ids) ? event.metadata.cited_chunk_ids.length : 0} citations validated`;
+  if (event.eventType.startsWith('AGENT_') || event.eventType.startsWith('TOOL_CALL_'))
+    return [
+      event.metadata.step_number && `step ${String(event.metadata.step_number)}`,
+      event.metadata.tool_name,
+      event.metadata.action_type,
+      event.metadata.reason,
+      event.metadata.message,
+      event.metadata.status,
+      event.metadata.latency_ms ? `${String(event.metadata.latency_ms)} ms` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' · ');
   return event.metadata.prompt ? String(event.metadata.prompt) : '';
 };
 export const parseConditionValue = (value: string): string | number | boolean | null => {
@@ -358,6 +381,7 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
               'TRANSFORM',
               'HTTP_REQUEST',
               'RETRIEVAL',
+              'AGENT',
               'OUTPUT',
             ] as NodeType[]
           ).map((type) => (
@@ -704,6 +728,105 @@ export function WorkflowEditor({ projectId, workflow, onBack }: WorkflowEditorPr
               </p>
             </>
           )}{' '}
+          {selected?.data.nodeType === 'AGENT' &&
+            (() => {
+              const config = selected.data.config as Record<string, unknown>;
+              const allowed = Array.isArray(config.allowed_tools)
+                ? (config.allowed_tools as string[])
+                : [];
+              const approvals = Array.isArray(config.require_approval_for)
+                ? (config.require_approval_for as string[])
+                : [];
+              return (
+                <>
+                  <label>
+                    Model
+                    <input
+                      aria-label="Agent model"
+                      value={String(config.model ?? 'development-agent-v1')}
+                      onChange={(e) => updateConfig('model', e.target.value)}
+                    />
+                  </label>
+                  <fieldset>
+                    <legend>Allowed tools</legend>
+                    {['retrieval', 'transform', 'http_request'].map((tool) => (
+                      <label key={tool}>
+                        <input
+                          type="checkbox"
+                          checked={allowed.includes(tool)}
+                          onChange={(e) =>
+                            updateConfig(
+                              'allowed_tools',
+                              e.target.checked
+                                ? [...allowed, tool]
+                                : allowed.filter((x) => x !== tool),
+                            )
+                          }
+                        />
+                        {tool}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <label>
+                    Max steps
+                    <input
+                      aria-label="Agent max steps"
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={Number(config.max_steps ?? 5)}
+                      onChange={(e) => updateConfig('max_steps', Number(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Max tool calls
+                    <input
+                      aria-label="Agent max tool calls"
+                      type="number"
+                      min="0"
+                      max="10"
+                      value={Number(config.max_tool_calls ?? 5)}
+                      onChange={(e) => updateConfig('max_tool_calls', Number(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Max duration (ms)
+                    <input
+                      aria-label="Agent max duration"
+                      type="number"
+                      min="1000"
+                      max="120000"
+                      value={Number(config.max_duration_ms ?? 60000)}
+                      onChange={(e) => updateConfig('max_duration_ms', Number(e.target.value))}
+                    />
+                  </label>
+                  <fieldset>
+                    <legend>Require approval</legend>
+                    {allowed.map((tool) => (
+                      <label key={tool}>
+                        <input
+                          type="checkbox"
+                          checked={approvals.includes(tool)}
+                          onChange={(e) =>
+                            updateConfig(
+                              'require_approval_for',
+                              e.target.checked
+                                ? [...approvals, tool]
+                                : approvals.filter((x) => x !== tool),
+                            )
+                          }
+                        />
+                        {tool}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <p className="security-warning">
+                    Tool observations are untrusted data. Hidden model reasoning is never requested
+                    or displayed.
+                  </p>
+                </>
+              );
+            })()}{' '}
           <div className="action-stack">
             <button disabled={readOnlyVersion !== null} onClick={() => save.mutate()}>
               Save draft

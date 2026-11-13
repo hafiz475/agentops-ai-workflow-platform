@@ -165,6 +165,24 @@ export const evaluateOutput = (
         config.forbidden_chunk_ids.every((id) => !cited.has(id));
       break;
     }
+    case 'AGENT_SUCCESS':
+      passed = (actual.agent as Record<string, unknown> | undefined)?.status === 'COMPLETED';
+      break;
+    case 'MAX_STEPS_EXCEEDED':
+      passed =
+        (actual.agent as Record<string, unknown> | undefined)?.status === 'LIMIT_REACHED' &&
+        (actual.agent as Record<string, unknown>).limit_reason === 'MAX_STEPS';
+      break;
+    case 'EXPECTED_TOOL_USED':
+      passed = stringArray(
+        (actual.agent as Record<string, unknown> | undefined)?.tools_used,
+      ).includes(config.tool_name);
+      break;
+    case 'FORBIDDEN_TOOL_NOT_USED':
+      passed = !stringArray(
+        (actual.agent as Record<string, unknown> | undefined)?.tools_used,
+      ).includes(config.tool_name);
+      break;
   }
   return {
     score: passed ? 1 : 0,

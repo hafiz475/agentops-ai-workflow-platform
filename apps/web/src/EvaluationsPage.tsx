@@ -103,6 +103,16 @@ export function EvaluationsPage({ projectId }: EvaluationsPageProps) {
       else if (evaluatorType === 'RETRIEVAL_RECALL_AT_K')
         config = { type: 'RETRIEVAL_RECALL_AT_K', k: Number(evaluatorValue) };
       else if (evaluatorType === 'RETRIEVAL_MRR') config = { type: 'RETRIEVAL_MRR' };
+      else if (evaluatorType === 'AGENT_SUCCESS' || evaluatorType === 'MAX_STEPS_EXCEEDED')
+        config = { type: evaluatorType };
+      else if (
+        evaluatorType === 'EXPECTED_TOOL_USED' ||
+        evaluatorType === 'FORBIDDEN_TOOL_NOT_USED'
+      )
+        config = {
+          type: evaluatorType,
+          tool_name: evaluatorValue as 'retrieval' | 'http_request' | 'transform',
+        };
       else {
         const citation = parseJsonObject(evaluatorValue);
         config = {
@@ -217,12 +227,18 @@ export function EvaluationsPage({ projectId }: EvaluationsPageProps) {
                   'RETRIEVAL_RECALL_AT_K',
                   'RETRIEVAL_MRR',
                   'CITATION_MATCH',
+                  'AGENT_SUCCESS',
+                  'MAX_STEPS_EXCEEDED',
+                  'EXPECTED_TOOL_USED',
+                  'FORBIDDEN_TOOL_NOT_USED',
                 ].map((type) => (
                   <option key={type}>{type}</option>
                 ))}
               </select>
             </label>
-            {!['EXACT_MATCH', 'RETRIEVAL_MRR'].includes(evaluatorType) && (
+            {!['EXACT_MATCH', 'RETRIEVAL_MRR', 'AGENT_SUCCESS', 'MAX_STEPS_EXCEEDED'].includes(
+              evaluatorType,
+            ) && (
               <label>
                 Evaluator configuration
                 <textarea

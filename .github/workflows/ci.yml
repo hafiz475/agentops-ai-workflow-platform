@@ -38,6 +38,8 @@ jobs:
         run: npx tsx --test apps/api/test/milestone4.test.ts
       - name: Test API knowledge ingestion, retrieval, RAG, and citations
         run: npx tsx --test apps/api/test/milestone5.test.ts
+      - name: Test API controlled agents, tool limits, approvals, and recovery
+        run: npx tsx --test apps/api/test/milestone6.test.ts
       - name: Test dashboard
         run: npm test --workspace=@agentops/web
       - run: npm run build

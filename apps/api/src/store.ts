@@ -82,6 +82,71 @@ export interface ApprovalRequestRecord {
   reason: string | null;
   createdAt: string;
   updatedAt: string;
+  approvalType: 'HUMAN_NODE' | 'AGENT_TOOL';
+  toolCallId: string | null;
+  safeContext: Record<string, unknown>;
+}
+export type AgentExecutionStatus =
+  'RUNNING' | 'WAITING_FOR_APPROVAL' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'LIMIT_REACHED';
+export interface AgentExecutionRecord {
+  id: string;
+  projectId: string;
+  runId: string;
+  nodeRunId: string;
+  status: AgentExecutionStatus;
+  model: string;
+  maxSteps: number;
+  maxDurationMs: number;
+  maxToolCalls: number;
+  maxTotalTokens: number;
+  stepsUsed: number;
+  toolCallsUsed: number;
+  totalTokens: number;
+  activeDurationMs: number;
+  limitReason: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface AgentStepRecord {
+  id: string;
+  agentExecutionId: string;
+  stepNumber: number;
+  actionType: 'TOOL_CALL' | 'FINAL' | null;
+  toolName: string | null;
+  actionSummary: string | null;
+  input: Record<string, unknown>;
+  output: Record<string, unknown> | null;
+  status: 'RUNNING' | 'WAITING_FOR_APPROVAL' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  inputTokens: number | null;
+  outputTokens: number | null;
+  latencyMs: number | null;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+}
+export interface ToolCallRecord {
+  id: string;
+  agentStepId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  status:
+    | 'PROPOSED'
+    | 'WAITING_FOR_APPROVAL'
+    | 'RUNNING'
+    | 'COMPLETED'
+    | 'FAILED'
+    | 'REJECTED'
+    | 'CANCELLED';
+  approvalRequired: boolean;
+  approvalRequestId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
 }
 export interface TraceEventRecord {
   id: string;
@@ -292,7 +357,81 @@ export interface Store {
     nodeRunId: string;
     title: string;
     instructions: string;
+    approvalType?: 'HUMAN_NODE' | 'AGENT_TOOL';
+    toolCallId?: string;
+    safeContext?: Record<string, unknown>;
   }): Promise<ApprovalRequestRecord>;
+  createAgentExecution(input: {
+    projectId: string;
+    runId: string;
+    nodeRunId: string;
+    model: string;
+    maxSteps: number;
+    maxDurationMs: number;
+    maxToolCalls: number;
+    maxTotalTokens: number;
+  }): Promise<AgentExecutionRecord>;
+  getAgentExecution(nodeRunId: string): Promise<AgentExecutionRecord | null>;
+  updateAgentExecution(
+    id: string,
+    patch: Partial<
+      Pick<
+        AgentExecutionRecord,
+        | 'status'
+        | 'stepsUsed'
+        | 'toolCallsUsed'
+        | 'totalTokens'
+        | 'activeDurationMs'
+        | 'limitReason'
+        | 'completedAt'
+      >
+    >,
+  ): Promise<void>;
+  createAgentStep(input: {
+    agentExecutionId: string;
+    stepNumber: number;
+    input: Record<string, unknown>;
+  }): Promise<AgentStepRecord>;
+  listAgentSteps(agentExecutionId: string): Promise<AgentStepRecord[]>;
+  updateAgentStep(
+    id: string,
+    patch: Partial<
+      Pick<
+        AgentStepRecord,
+        | 'actionType'
+        | 'toolName'
+        | 'actionSummary'
+        | 'output'
+        | 'status'
+        | 'inputTokens'
+        | 'outputTokens'
+        | 'latencyMs'
+        | 'completedAt'
+      >
+    >,
+  ): Promise<void>;
+  createToolCall(input: {
+    agentStepId: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    approvalRequired: boolean;
+  }): Promise<ToolCallRecord>;
+  getToolCall(agentStepId: string): Promise<ToolCallRecord | null>;
+  updateToolCall(
+    id: string,
+    patch: Partial<
+      Pick<
+        ToolCallRecord,
+        | 'result'
+        | 'status'
+        | 'approvalRequestId'
+        | 'errorCode'
+        | 'errorMessage'
+        | 'startedAt'
+        | 'completedAt'
+      >
+    >,
+  ): Promise<void>;
   listApprovals(projectId: string): Promise<ApprovalRequestRecord[]>;
   getApproval(projectId: string, approvalId: string): Promise<ApprovalRequestRecord | null>;
   getApprovalForNodeRun(nodeRunId: string): Promise<ApprovalRequestRecord | null>;
@@ -527,6 +666,62 @@ const approvalFromRow = (row: Record<string, unknown>): ApprovalRequestRecord =>
   reason: row.reason == null ? null : String(row.reason),
   createdAt: String(row.created_at),
   updatedAt: String(row.updated_at),
+  approvalType: (row.approval_type ?? 'HUMAN_NODE') as 'HUMAN_NODE' | 'AGENT_TOOL',
+  toolCallId: row.tool_call_id == null ? null : String(row.tool_call_id),
+  safeContext: (row.safe_context as Record<string, unknown>) ?? {},
+});
+const agentExecutionFromRow = (row: Record<string, unknown>): AgentExecutionRecord => ({
+  id: String(row.id),
+  projectId: String(row.project_id),
+  runId: String(row.run_id),
+  nodeRunId: String(row.node_run_id),
+  status: row.status as AgentExecutionStatus,
+  model: String(row.model),
+  maxSteps: Number(row.max_steps),
+  maxDurationMs: Number(row.max_duration_ms),
+  maxToolCalls: Number(row.max_tool_calls),
+  maxTotalTokens: Number(row.max_total_tokens),
+  stepsUsed: Number(row.steps_used),
+  toolCallsUsed: Number(row.tool_calls_used),
+  totalTokens: Number(row.total_tokens),
+  activeDurationMs: Number(row.active_duration_ms),
+  limitReason: row.limit_reason == null ? null : String(row.limit_reason),
+  startedAt: String(row.started_at),
+  completedAt: row.completed_at == null ? null : String(row.completed_at),
+  createdAt: String(row.created_at),
+  updatedAt: String(row.updated_at),
+});
+const agentStepFromRow = (row: Record<string, unknown>): AgentStepRecord => ({
+  id: String(row.id),
+  agentExecutionId: String(row.agent_execution_id),
+  stepNumber: Number(row.step_number),
+  actionType: row.action_type as AgentStepRecord['actionType'],
+  toolName: row.tool_name == null ? null : String(row.tool_name),
+  actionSummary: row.action_summary == null ? null : String(row.action_summary),
+  input: (row.input_json as Record<string, unknown>) ?? {},
+  output: (row.output_json as Record<string, unknown> | null) ?? null,
+  status: row.status as AgentStepRecord['status'],
+  inputTokens: row.input_tokens == null ? null : Number(row.input_tokens),
+  outputTokens: row.output_tokens == null ? null : Number(row.output_tokens),
+  latencyMs: row.latency_ms == null ? null : Number(row.latency_ms),
+  startedAt: String(row.started_at),
+  completedAt: row.completed_at == null ? null : String(row.completed_at),
+  createdAt: String(row.created_at),
+});
+const toolCallFromRow = (row: Record<string, unknown>): ToolCallRecord => ({
+  id: String(row.id),
+  agentStepId: String(row.agent_step_id),
+  toolName: String(row.tool_name),
+  arguments: (row.arguments_json as Record<string, unknown>) ?? {},
+  result: (row.result_json as Record<string, unknown> | null) ?? null,
+  status: row.status as ToolCallRecord['status'],
+  approvalRequired: Boolean(row.approval_required),
+  approvalRequestId: row.approval_request_id == null ? null : String(row.approval_request_id),
+  errorCode: row.error_code == null ? null : String(row.error_code),
+  errorMessage: row.error_message == null ? null : String(row.error_message),
+  startedAt: row.started_at == null ? null : String(row.started_at),
+  completedAt: row.completed_at == null ? null : String(row.completed_at),
+  createdAt: String(row.created_at),
 });
 const traceFromRow = (row: Record<string, unknown>): TraceEventRecord => ({
   id: String(row.id),
@@ -910,10 +1105,27 @@ export class PostgresStore implements Store {
     nodeRunId: string;
     title: string;
     instructions: string;
+    approvalType?: 'HUMAN_NODE' | 'AGENT_TOOL';
+    toolCallId?: string;
+    safeContext?: Record<string, unknown>;
   }): Promise<ApprovalRequestRecord> {
+    const conflict =
+      input.approvalType === 'AGENT_TOOL'
+        ? 'ON CONFLICT (tool_call_id) WHERE tool_call_id IS NOT NULL DO UPDATE SET updated_at=NOW()'
+        : "ON CONFLICT (node_run_id) WHERE approval_type='HUMAN_NODE' DO UPDATE SET updated_at=NOW()";
     const { rows } = await this.pool.query(
-      'INSERT INTO approval_requests(project_id,run_id,node_run_id,title,instructions) VALUES($1,$2,$3,$4,$5) ON CONFLICT (node_run_id) DO UPDATE SET updated_at=NOW() RETURNING *',
-      [input.projectId, input.runId, input.nodeRunId, input.title, input.instructions],
+      `INSERT INTO approval_requests(project_id,run_id,node_run_id,title,instructions,approval_type,tool_call_id,safe_context)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8) ${conflict} RETURNING *`,
+      [
+        input.projectId,
+        input.runId,
+        input.nodeRunId,
+        input.title,
+        input.instructions,
+        input.approvalType ?? 'HUMAN_NODE',
+        input.toolCallId ?? null,
+        input.safeContext ?? {},
+      ],
     );
     return approvalFromRow(rows[0] as Record<string, unknown>);
   }
@@ -935,10 +1147,169 @@ export class PostgresStore implements Store {
     return rows[0] ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
   }
   public async getApprovalForNodeRun(nodeRunId: string): Promise<ApprovalRequestRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM approval_requests WHERE node_run_id=$1', [
+    const { rows } = await this.pool.query(
+      'SELECT * FROM approval_requests WHERE node_run_id=$1 ORDER BY requested_at DESC',
+      [nodeRunId],
+    );
+    return rows[0] ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async createAgentExecution(input: {
+    projectId: string;
+    runId: string;
+    nodeRunId: string;
+    model: string;
+    maxSteps: number;
+    maxDurationMs: number;
+    maxToolCalls: number;
+    maxTotalTokens: number;
+  }): Promise<AgentExecutionRecord> {
+    const { rows } = await this.pool.query(
+      'INSERT INTO agent_executions(project_id,run_id,node_run_id,model,max_steps,max_duration_ms,max_tool_calls,max_total_tokens) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(node_run_id) DO UPDATE SET updated_at=NOW() RETURNING *',
+      [
+        input.projectId,
+        input.runId,
+        input.nodeRunId,
+        input.model,
+        input.maxSteps,
+        input.maxDurationMs,
+        input.maxToolCalls,
+        input.maxTotalTokens,
+      ],
+    );
+    return agentExecutionFromRow(rows[0] as Record<string, unknown>);
+  }
+  public async getAgentExecution(nodeRunId: string) {
+    const { rows } = await this.pool.query('SELECT * FROM agent_executions WHERE node_run_id=$1', [
       nodeRunId,
     ]);
-    return rows[0] ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
+    return rows[0] ? agentExecutionFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async updateAgentExecution(
+    id: string,
+    patch: Partial<
+      Pick<
+        AgentExecutionRecord,
+        | 'status'
+        | 'stepsUsed'
+        | 'toolCallsUsed'
+        | 'totalTokens'
+        | 'activeDurationMs'
+        | 'limitReason'
+        | 'completedAt'
+      >
+    >,
+  ) {
+    await this.pool.query(
+      'UPDATE agent_executions SET status=COALESCE($2,status),steps_used=COALESCE($3,steps_used),tool_calls_used=COALESCE($4,tool_calls_used),total_tokens=COALESCE($5,total_tokens),active_duration_ms=COALESCE($6,active_duration_ms),limit_reason=COALESCE($7,limit_reason),completed_at=COALESCE($8,completed_at),updated_at=NOW() WHERE id=$1',
+      [
+        id,
+        patch.status ?? null,
+        patch.stepsUsed ?? null,
+        patch.toolCallsUsed ?? null,
+        patch.totalTokens ?? null,
+        patch.activeDurationMs ?? null,
+        patch.limitReason ?? null,
+        patch.completedAt ?? null,
+      ],
+    );
+  }
+  public async createAgentStep(input: {
+    agentExecutionId: string;
+    stepNumber: number;
+    input: Record<string, unknown>;
+  }): Promise<AgentStepRecord> {
+    const { rows } = await this.pool.query(
+      'INSERT INTO agent_steps(agent_execution_id,step_number,input_json) VALUES($1,$2,$3) ON CONFLICT(agent_execution_id,step_number) DO UPDATE SET agent_execution_id=EXCLUDED.agent_execution_id RETURNING *',
+      [input.agentExecutionId, input.stepNumber, input.input],
+    );
+    return agentStepFromRow(rows[0] as Record<string, unknown>);
+  }
+  public async listAgentSteps(agentExecutionId: string) {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM agent_steps WHERE agent_execution_id=$1 ORDER BY step_number',
+      [agentExecutionId],
+    );
+    return rows.map((r) => agentStepFromRow(r as Record<string, unknown>));
+  }
+  public async updateAgentStep(
+    id: string,
+    patch: Partial<
+      Pick<
+        AgentStepRecord,
+        | 'actionType'
+        | 'toolName'
+        | 'actionSummary'
+        | 'output'
+        | 'status'
+        | 'inputTokens'
+        | 'outputTokens'
+        | 'latencyMs'
+        | 'completedAt'
+      >
+    >,
+  ) {
+    await this.pool.query(
+      'UPDATE agent_steps SET action_type=COALESCE($2,action_type),tool_name=COALESCE($3,tool_name),action_summary=COALESCE($4,action_summary),output_json=COALESCE($5,output_json),status=COALESCE($6,status),input_tokens=COALESCE($7,input_tokens),output_tokens=COALESCE($8,output_tokens),latency_ms=COALESCE($9,latency_ms),completed_at=COALESCE($10,completed_at) WHERE id=$1',
+      [
+        id,
+        patch.actionType ?? null,
+        patch.toolName ?? null,
+        patch.actionSummary ?? null,
+        patch.output ?? null,
+        patch.status ?? null,
+        patch.inputTokens ?? null,
+        patch.outputTokens ?? null,
+        patch.latencyMs ?? null,
+        patch.completedAt ?? null,
+      ],
+    );
+  }
+  public async createToolCall(input: {
+    agentStepId: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    approvalRequired: boolean;
+  }): Promise<ToolCallRecord> {
+    const { rows } = await this.pool.query(
+      'INSERT INTO tool_calls(agent_step_id,tool_name,arguments_json,approval_required) VALUES($1,$2,$3,$4) ON CONFLICT(agent_step_id) DO UPDATE SET agent_step_id=EXCLUDED.agent_step_id RETURNING *',
+      [input.agentStepId, input.toolName, input.arguments, input.approvalRequired],
+    );
+    return toolCallFromRow(rows[0] as Record<string, unknown>);
+  }
+  public async getToolCall(agentStepId: string) {
+    const { rows } = await this.pool.query('SELECT * FROM tool_calls WHERE agent_step_id=$1', [
+      agentStepId,
+    ]);
+    return rows[0] ? toolCallFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+  public async updateToolCall(
+    id: string,
+    patch: Partial<
+      Pick<
+        ToolCallRecord,
+        | 'result'
+        | 'status'
+        | 'approvalRequestId'
+        | 'errorCode'
+        | 'errorMessage'
+        | 'startedAt'
+        | 'completedAt'
+      >
+    >,
+  ) {
+    await this.pool.query(
+      'UPDATE tool_calls SET result_json=COALESCE($2,result_json),status=COALESCE($3,status),approval_request_id=COALESCE($4,approval_request_id),error_code=$5,error_message=$6,started_at=COALESCE($7,started_at),completed_at=COALESCE($8,completed_at) WHERE id=$1',
+      [
+        id,
+        patch.result ?? null,
+        patch.status ?? null,
+        patch.approvalRequestId ?? null,
+        patch.errorCode ?? null,
+        patch.errorMessage ?? null,
+        patch.startedAt ?? null,
+        patch.completedAt ?? null,
+      ],
+    );
   }
   public async decideApproval(
     projectId: string,

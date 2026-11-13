@@ -7,6 +7,7 @@ export type NodeType =
   | 'TRANSFORM'
   | 'HTTP_REQUEST'
   | 'RETRIEVAL'
+  | 'AGENT'
   | 'OUTPUT';
 export interface GraphNode {
   id: string;
@@ -95,7 +96,11 @@ export type EvaluatorConfig =
   | { type: 'RETRIEVAL_HIT_AT_K'; k: number }
   | { type: 'RETRIEVAL_RECALL_AT_K'; k: number }
   | { type: 'RETRIEVAL_MRR' }
-  | { type: 'CITATION_MATCH'; required_chunk_ids: string[]; forbidden_chunk_ids: string[] };
+  | { type: 'CITATION_MATCH'; required_chunk_ids: string[]; forbidden_chunk_ids: string[] }
+  | { type: 'AGENT_SUCCESS' }
+  | { type: 'MAX_STEPS_EXCEEDED' }
+  | { type: 'EXPECTED_TOOL_USED'; tool_name: 'retrieval' | 'http_request' | 'transform' }
+  | { type: 'FORBIDDEN_TOOL_NOT_USED'; tool_name: 'retrieval' | 'http_request' | 'transform' };
 export interface EvaluationCase {
   id: string;
   datasetId: string;
@@ -149,6 +154,8 @@ export interface Approval {
   decidedAt: string | null;
   reviewerLabel: string | null;
   reason: string | null;
+  approvalType: 'HUMAN_NODE' | 'AGENT_TOOL';
+  safeContext: Record<string, unknown>;
   run?: Run | null;
   nodeRuns?: NodeRun[];
 }

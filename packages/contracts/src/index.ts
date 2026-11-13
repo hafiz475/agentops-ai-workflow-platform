@@ -148,6 +148,33 @@ export const retrievalNodeSchema = nodeBaseSchema.extend({
     })
     .strict(),
 });
+export const agentToolNameSchema = z.enum(['retrieval', 'http_request', 'transform']);
+export const agentNodeSchema = nodeBaseSchema.extend({
+  type: z.literal('AGENT'),
+  config: z
+    .object({
+      model: z.string().min(1).max(200),
+      allowed_tools: z
+        .array(agentToolNameSchema)
+        .min(1)
+        .max(3)
+        .refine((tools) => new Set(tools).size === tools.length, 'Agent tools must be unique.'),
+      max_steps: z.number().int().min(1).max(10).default(5),
+      max_duration_ms: z.number().int().min(1_000).max(120_000).default(60_000),
+      max_tool_calls: z.number().int().min(0).max(10).default(5),
+      max_total_tokens: z.number().int().min(100).max(100_000).default(10_000),
+      require_approval_for: z.array(agentToolNameSchema).max(3).default([]),
+    })
+    .strict()
+    .superRefine((config, context) => {
+      for (const tool of config.require_approval_for)
+        if (!config.allowed_tools.includes(tool))
+          context.addIssue({
+            code: 'custom',
+            message: `Approval-required tool ${tool} must also be allowed.`,
+          });
+    }),
+});
 export const workflowNodeSchema = z.discriminatedUnion('type', [
   inputNodeSchema,
   promptNodeSchema,
@@ -157,6 +184,7 @@ export const workflowNodeSchema = z.discriminatedUnion('type', [
   transformNodeSchema,
   httpRequestNodeSchema,
   retrievalNodeSchema,
+  agentNodeSchema,
   outputNodeSchema,
 ]);
 export const workflowEdgeSchema = z
@@ -202,6 +230,10 @@ export const evaluatorConfigSchema = z.discriminatedUnion('type', [
       forbidden_chunk_ids: z.array(z.string().uuid()).default([]),
     })
     .strict(),
+  z.object({ type: z.literal('AGENT_SUCCESS') }).strict(),
+  z.object({ type: z.literal('MAX_STEPS_EXCEEDED') }).strict(),
+  z.object({ type: z.literal('EXPECTED_TOOL_USED'), tool_name: agentToolNameSchema }).strict(),
+  z.object({ type: z.literal('FORBIDDEN_TOOL_NOT_USED'), tool_name: agentToolNameSchema }).strict(),
 ]);
 export type EvaluatorConfig = z.infer<typeof evaluatorConfigSchema>;
 
@@ -238,6 +270,67 @@ export const embeddingResponseSchema = z.object({
 });
 export type EmbeddingRequest = z.infer<typeof embeddingRequestSchema>;
 export type EmbeddingResponse = z.infer<typeof embeddingResponseSchema>;
+
+export const agentToolDefinitionSchema = z.object({
+  name: agentToolNameSchema,
+  description: z.string().min(1).max(500),
+  input_schema: z.record(z.string(), z.unknown()),
+  sensitivity: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+});
+export const agentObservationSchema = z.object({
+  step_number: z.number().int().positive(),
+  tool_name: agentToolNameSchema,
+  status: z.enum(['COMPLETED', 'FAILED', 'REJECTED_BY_HUMAN']),
+  result: z.record(z.string(), z.unknown()).optional(),
+  error_code: z.string().max(100).optional(),
+  error_message: z.string().max(1_000).optional(),
+});
+export const agentActionSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('TOOL_CALL'),
+      tool_name: agentToolNameSchema,
+      arguments: z.record(z.string(), z.unknown()),
+      action_summary: z.string().min(1).max(500),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('FINAL'),
+      output: z.object({ text: z.string() }).catchall(z.unknown()),
+      action_summary: z.string().min(1).max(500),
+    })
+    .strict(),
+]);
+export const agentActionRequestSchema = z.object({
+  run_id: z.string().uuid(),
+  node_id: z.string().min(1),
+  goal: z.string().min(1).max(100_000),
+  model: z.string().min(1).max(200),
+  step_number: z.number().int().positive().max(10),
+  allowed_tools: z.array(agentToolDefinitionSchema).min(1).max(3),
+  observations: z.array(agentObservationSchema).max(10),
+  limits: z.object({
+    max_steps: z.number().int().min(1).max(10),
+    max_tool_calls: z.number().int().min(0).max(10),
+    max_duration_ms: z.number().int().min(1_000).max(120_000),
+    max_total_tokens: z.number().int().min(100).max(100_000),
+  }),
+});
+export const agentActionResponseSchema = z.object({
+  action: agentActionSchema,
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  latency_ms: z.number().int().nonnegative(),
+  input_tokens: z.number().int().nonnegative().nullable(),
+  output_tokens: z.number().int().nonnegative().nullable(),
+});
+export type AgentToolName = z.infer<typeof agentToolNameSchema>;
+export type AgentToolDefinition = z.infer<typeof agentToolDefinitionSchema>;
+export type AgentObservation = z.infer<typeof agentObservationSchema>;
+export type AgentAction = z.infer<typeof agentActionSchema>;
+export type AgentActionRequest = z.infer<typeof agentActionRequestSchema>;
+export type AgentActionResponse = z.infer<typeof agentActionResponseSchema>;
 
 export const runStatusSchema = z.enum([
   'QUEUED',

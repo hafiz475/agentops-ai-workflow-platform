@@ -83,6 +83,54 @@ def test_openapi_documents_generation_contract() -> None:
     schema = client.get("/openapi.json").json()
     assert "/v1/generate" in schema["paths"]
     assert "/v1/embeddings" in schema["paths"]
+    assert "/v1/agent/action" in schema["paths"]
+
+
+def test_development_agent_selects_strict_tools_then_final() -> None:
+    base = {
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "agent",
+        "goal": (
+            '{"tool_plan":[{"tool_name":"transform","arguments":'
+            '{"template":{"text":"ok"}}}],"final":{"text":"done"}}'
+        ),
+        "model": "development-agent-v1",
+        "step_number": 1,
+        "allowed_tools": [
+            {
+                "name": "transform",
+                "description": "safe",
+                "input_schema": {"type": "object"},
+                "sensitivity": "LOW",
+            }
+        ],
+        "observations": [],
+        "limits": {
+            "max_steps": 5,
+            "max_tool_calls": 5,
+            "max_duration_ms": 60000,
+            "max_total_tokens": 10000,
+        },
+    }
+    first = client.post("/v1/agent/action", json=base)
+    assert first.status_code == 200
+    assert first.json()["action"]["type"] == "TOOL_CALL"
+    base["step_number"] = 2
+    base["observations"] = [
+        {
+            "step_number": 1,
+            "tool_name": "transform",
+            "status": "COMPLETED",
+            "result": {"text": "ok"},
+        }
+    ]
+    final = client.post("/v1/agent/action", json=base)
+    assert final.status_code == 200
+    assert final.json()["action"] == {
+        "type": "FINAL",
+        "output": {"text": "done"},
+        "action_summary": "Return the final result",
+    }
 
 
 def test_development_embeddings_are_deterministic_and_dimensioned() -> None:
@@ -137,3 +185,40 @@ def test_openai_embedding_adapter_contract() -> None:
     assert result.dimensions == 2
     assert result.vectors == [[1.0, 0.0], [0.0, 1.0]]
     assert result.input_tokens == 2
+
+
+def test_openai_agent_adapter_uses_structured_action_schema() -> None:
+    class FakeResponses:
+        async def create(self, **kwargs: object) -> object:
+            text = cast(dict[str, Any], kwargs["text"])
+            assert cast(dict[str, Any], text["format"])["type"] == "json_schema"
+            return SimpleNamespace(
+                output_text=(
+                    '{"type":"FINAL","output":{"text":"done"},'
+                    '"action_summary":"finish"}'
+                ),
+                model="gpt-test",
+                usage=SimpleNamespace(input_tokens=4, output_tokens=3),
+            )
+
+    provider = OpenAIProvider("sk-test", "gpt-test", "text-embedding-3-small")
+    cast(Any, provider)._client = SimpleNamespace(responses=FakeResponses())
+    result = asyncio.run(
+        provider.select_agent_action(
+            "goal",
+            [
+                {
+                    "name": "transform",
+                    "description": "safe",
+                    "input_schema": {"type": "object"},
+                    "sensitivity": "LOW",
+                }
+            ],
+            [],
+            "configured-default",
+            1,
+        )
+    )
+    assert result["action"]["type"] == "FINAL"
+    assert result["input_tokens"] == 4
+    assert result["output_tokens"] == 3
