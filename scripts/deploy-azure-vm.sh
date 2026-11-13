@@ -88,6 +88,8 @@ if ! wait_for_worker ||
   exit 1
 fi
 
+python3 ./scripts/smoke-milestone6.py
+
 "${compose[@]}" ps
 echo "Successfully deployed ${deploy_sha}."
 echo "DEPLOYMENT_SUCCEEDED_SHA=${deploy_sha}"
